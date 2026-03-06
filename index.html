@@ -651,15 +651,20 @@ function render() {
   if (state.loading) { app.innerHTML = renderHeader() + `<div class="loading">Loading deals...</div>`; wireHeaderEvents(); return; }
 
   let h = renderHeader();
-  h += renderStats();
-  h += `<div class="main">`;
-  if (state.view === "kanban") h += renderKanban();
-  else h += renderTable();
-  h += `</div>`;
+  if (state.view === "uwcalc") {
+    h += `<div class="main">` + renderUWCalc() + `</div>`;
+  } else {
+    h += renderStats();
+    h += `<div class="main">`;
+    if (state.view === "kanban") h += renderKanban();
+    else h += renderTable();
+    h += `</div>`;
+  }
   if (state.selectedDeal) h += renderModal(state.selectedDeal);
   app.innerHTML = h;
   wireHeaderEvents();
   wireEvents();
+  if (state.view === "uwcalc") wireUWCalcEvents();
 }
 
 function renderLogin() {
@@ -679,6 +684,7 @@ function renderHeader() {
       <div class="view-toggle">
         <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
         <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
+        <button class="view-btn ${state.view==='uwcalc'?'active':''}" data-view="uwcalc">UW Calc</button>
       </div>
     </div>
     <div class="header-right">
@@ -941,6 +947,87 @@ function wireEvents() {
   }
   const closeBtn = document.getElementById("modal-close");
   if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
+}
+
+// ---- QUICK UW CALCULATOR ----
+function renderUWCalc() {
+  const u = state.uwCalc || { price:"", sqft:"", rentPsf:"", vacancy:"8", expenseRatio:"35", targetCap:"7.5" };
+  state.uwCalc = u;
+  const price = parseFloat(u.price)||0;
+  const sf = parseFloat(u.sqft)||0;
+  const rent = parseFloat(u.rentPsf)||0;
+  const vac = parseFloat(u.vacancy)||0;
+  const exp = parseFloat(u.expenseRatio)||0;
+  const cap = parseFloat(u.targetCap)||0;
+  const canCalc = sf && rent && cap;
+  const gpr = sf * rent;
+  const egi = gpr * (1 - vac/100);
+  const noi = egi * (1 - exp/100);
+  const impliedValue = cap > 0 ? noi / (cap/100) : 0;
+  const valuePsf = sf > 0 ? impliedValue / sf : 0;
+  const spread = price > 0 ? impliedValue - price : 0;
+  const spreadPct = price > 0 ? ((impliedValue/price)-1)*100 : 0;
+  const impliedCap = price > 0 ? (noi/price)*100 : 0;
+
+  let h = `<div style="max-width:680px;margin:32px auto;padding:0 24px">`;
+  h += `<h2 style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text);margin-bottom:20px">Quick Underwriting Calculator</h2>`;
+  h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px">`;
+  
+  // Input grid
+  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">`;
+  [["Asking Price","uw-d-price",u.price,"4850000"],["Building SF","uw-d-sqft",u.sqft,"14820"],
+   ["Rent / SF","uw-d-rent",u.rentPsf,"18.00"],["Vacancy %","uw-d-vac",u.vacancy,"8"],
+   ["Expense Ratio %","uw-d-exp",u.expenseRatio,"35"],["Target Cap %","uw-d-cap",u.targetCap,"7.5"]
+  ].forEach(([label,id,val,ph]) => {
+    h += `<div><label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">${label}</label><input type="number" id="${id}" value="${val}" placeholder="${ph}" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
+  });
+  h += `</div>`;
+
+  // Results
+  if (canCalc) {
+    const spreadColor = spread >= 0 ? "#10B981" : "#EF4444";
+    const spreadSign = spread >= 0 ? "+" : "";
+    h += `<div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">`;
+    h += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;text-align:center">`;
+    [["Gross Potential Revenue",fmt$(Math.round(gpr))],["Effective Gross Income",fmt$(Math.round(egi))],["Net Operating Income",fmt$(Math.round(noi))],
+     ["Implied Value",fmt$(Math.round(impliedValue))],["Value / SF","$"+Math.round(valuePsf)],["Implied Cap Rate",impliedCap.toFixed(2)+"%"]
+    ].forEach(([l,v]) => {
+      h += `<div style="background:var(--bg);border-radius:8px;padding:12px"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">${l}</div><div style="font-size:18px;font-weight:800;color:var(--text);margin-top:4px">${v}</div></div>`;
+    });
+    h += `</div>`;
+    if (price > 0) {
+      h += `<div style="margin-top:16px;text-align:center;background:${spread>=0?'#F0FDF4':'#FEF2F2'};border-radius:8px;padding:16px"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Spread vs Asking</div><div style="font-size:24px;font-weight:800;margin-top:4px;color:${spreadColor}">${spreadSign}${fmt$(Math.round(spread))}</div><div style="font-size:13px;color:${spreadColor};font-weight:600">${spreadSign}${spreadPct.toFixed(1)}%</div></div>`;
+    }
+    h += `</div>`;
+  } else {
+    h += `<div style="margin-top:24px;text-align:center;color:var(--text-muted);font-size:13px;padding:20px 0">Enter Rent/SF, Building SF, and Target Cap to see results</div>`;
+  }
+
+  h += `</div></div>`;
+  return h;
+}
+
+function wireUWCalcEvents() {
+  ["uw-d-price","uw-d-sqft","uw-d-rent","uw-d-vac","uw-d-exp","uw-d-cap"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener("input", () => {
+        const map = {"uw-d-price":"price","uw-d-sqft":"sqft","uw-d-rent":"rentPsf","uw-d-vac":"vacancy","uw-d-exp":"expenseRatio","uw-d-cap":"targetCap"};
+        if (!state.uwCalc) state.uwCalc = { price:"", sqft:"", rentPsf:"", vacancy:"8", expenseRatio:"35", targetCap:"7.5" };
+        state.uwCalc[map[id]] = el.value;
+        // Re-render just the results without losing focus
+        const resultsArea = document.querySelector(".uw-results");
+        // Full re-render but refocus
+        const activeId = document.activeElement?.id;
+        const cursorPos = document.activeElement?.selectionStart;
+        render();
+        if (activeId) {
+          const refocus = document.getElementById(activeId);
+          if (refocus) { refocus.focus(); if (cursorPos !== undefined) refocus.setSelectionRange(cursorPos, cursorPos); }
+        }
+      });
+    }
+  });
 }
 
 // ---- INIT ----
