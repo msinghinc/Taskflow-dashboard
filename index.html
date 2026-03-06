@@ -507,9 +507,13 @@ const STAGES = [
   { id: "underwriting", label: "Underwriting", color: "#E8A838" },
   { id: "loi", label: "LOI Submitted", color: "#3B82F6" },
   { id: "loi_accepted", label: "LOI Accepted", color: "#0EA5E9" },
-  { id: "psa", label: "Under PSA", color: "#8B5CF6" },
-  { id: "closed", label: "Closed", color: "#10B981" },
   { id: "dead", label: "Dead", color: "#94A3B8" },
+];
+
+const DD_STAGES = [
+  { id: "negotiation_psa", label: "Negotiation PSA", color: "#8B5CF6" },
+  { id: "approved_psa", label: "Approved PSA", color: "#0EA5E9" },
+  { id: "closed", label: "Closed", color: "#10B981" },
 ];
 
 const PRIORITIES = {
@@ -524,11 +528,17 @@ let state = {
   tokenClient: null,
   spreadsheetId: null,
   deals: [],
+  ddDeals: [],
+  properties: [],
+  section: "acquisitions",
   view: "kanban",
   search: "",
   sortCol: null,
   sortDir: "asc",
   selectedDeal: null,
+  selectedDD: null,
+  selectedProp: null,
+  ddFilter: "all",
   loading: false,
 };
 
@@ -599,21 +609,51 @@ async function loadDeals() {
   state.loading = true;
   render();
 
+  // Load Acquisitions
   const data = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions");
-  if (!data || !data.values || data.values.length < 2) { state.deals = []; state.loading = false; return; }
+  if (data && data.values && data.values.length >= 2) {
+    const headers = data.values[0];
+    state.deals = data.values.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i] || ""; });
+      obj.askingPrice = parseFloat(obj.askingPrice) || 0;
+      obj.noi = parseFloat(obj.noi) || 0;
+      obj.capRate = parseFloat(obj.capRate) || 0;
+      obj.sqft = parseFloat(obj.sqft) || 0;
+      obj.createdAt = parseInt(obj.createdAt) || Date.now();
+      obj.lastActivity = parseInt(obj.lastActivity) || Date.now();
+      obj.hotList = obj.hotList === "true" || obj.hotList === true;
+      obj.brokerReached = obj.brokerReached === "true" || obj.brokerReached === true;
+      obj.callLog = obj.callLog ? JSON.parse(obj.callLog) : [];
+      return obj;
+    });
+  } else { state.deals = []; }
 
-  const headers = data.values[0];
-  state.deals = data.values.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] || ""; });
-    obj.askingPrice = parseFloat(obj.askingPrice) || 0;
-    obj.noi = parseFloat(obj.noi) || 0;
-    obj.capRate = parseFloat(obj.capRate) || 0;
-    obj.sqft = parseFloat(obj.sqft) || 0;
-    obj.createdAt = parseInt(obj.createdAt) || Date.now();
-    obj.lastActivity = parseInt(obj.lastActivity) || Date.now();
-    return obj;
-  });
+  // Load Due Diligence
+  const ddData = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence");
+  if (ddData && ddData.values && ddData.values.length >= 2) {
+    const ddHeaders = ddData.values[0];
+    state.ddDeals = ddData.values.slice(1).map(row => {
+      const obj = {};
+      ddHeaders.forEach((h, i) => { obj[h] = row[i] || ""; });
+      obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : [];
+      return obj;
+    });
+  } else { state.ddDeals = []; }
+
+  // Load Asset Management
+  const amData = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/AssetManagement");
+  if (amData && amData.values && amData.values.length >= 2) {
+    const amHeaders = amData.values[0];
+    state.properties = amData.values.slice(1).map(row => {
+      const obj = {};
+      amHeaders.forEach((h, i) => { obj[h] = row[i] || ""; });
+      obj.noi = parseFloat(obj.noi) || 0;
+      obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : [];
+      return obj;
+    });
+  } else { state.properties = []; }
+
   state.loading = false;
 }
 
@@ -651,20 +691,23 @@ function render() {
   if (state.loading) { app.innerHTML = renderHeader() + `<div class="loading">Loading deals...</div>`; wireHeaderEvents(); return; }
 
   let h = renderHeader();
-  if (state.view === "uwcalc") {
-    h += `<div class="main">` + renderUWCalc() + `</div>`;
-  } else {
+  if (state.section === "acquisitions") {
     h += renderStats();
     h += `<div class="main">`;
     if (state.view === "kanban") h += renderKanban();
     else h += renderTable();
     h += `</div>`;
+    if (state.selectedDeal) h += renderModal(state.selectedDeal);
+  } else if (state.section === "dd") {
+    h += `<div class="main">` + renderDDSection() + `</div>`;
+  } else if (state.section === "am") {
+    h += `<div class="main">` + renderAMSection() + `</div>`;
   }
-  if (state.selectedDeal) h += renderModal(state.selectedDeal);
   app.innerHTML = h;
   wireHeaderEvents();
   wireEvents();
-  if (state.view === "uwcalc") wireUWCalcEvents();
+  if (state.section === "dd") { wireDDEvents(); if(state.showUWCalc) wireUWCalcModal(); }
+  if (state.section === "am") wireAMEvents();
 }
 
 function renderLogin() {
@@ -678,30 +721,40 @@ function renderLogin() {
 }
 
 function renderHeader() {
+  let subToggle = "";
+  if (state.section === "acquisitions") {
+    subToggle = `<div class="view-toggle" style="margin-left:12px">
+      <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
+      <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
+    </div>`;
+  }
   return `<div class="header"><div class="header-inner">
     <div class="header-left">
       <h1>TaskFlow</h1>
       <div class="view-toggle">
-        <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
-        <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
-        <button class="view-btn ${state.view==='uwcalc'?'active':''}" data-view="uwcalc">UW Calc</button>
+        <button class="view-btn ${state.section==='acquisitions'?'active':''}" data-section="acquisitions">Acquisitions</button>
+        <button class="view-btn ${state.section==='dd'?'active':''}" data-section="dd">DD</button>
+        <button class="view-btn ${state.section==='am'?'active':''}" data-section="am">AM</button>
       </div>
+      ${subToggle}
     </div>
     <div class="header-right">
-      <input type="text" class="search-input" id="search-input" placeholder="Search deals..." value="${esc(state.search)}">
+      <input type="text" class="search-input" id="search-input" placeholder="Search..." value="${esc(state.search)}">
       <button class="login-btn" style="padding:8px 16px;font-size:12px" id="refresh-btn">↻ Refresh</button>
     </div>
   </div></div>`;
 }
 
 function wireHeaderEvents() {
+  document.querySelectorAll("[data-section]").forEach(btn => {
+    btn.addEventListener("click", () => { state.section = btn.dataset.section; state.search = ""; render(); });
+  });
   document.querySelectorAll("[data-view]").forEach(btn => {
     btn.addEventListener("click", () => { state.view = btn.dataset.view; render(); });
   });
   const searchEl = document.getElementById("search-input");
   if (searchEl) {
     searchEl.addEventListener("input", (e) => { state.search = e.target.value; render(); searchEl.focus(); });
-    // Restore cursor position
     if (document.activeElement === searchEl) searchEl.setSelectionRange(searchEl.value.length, searchEl.value.length);
   }
   const refreshBtn = document.getElementById("refresh-btn");
@@ -949,7 +1002,230 @@ function wireEvents() {
   if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
 }
 
-// ---- QUICK UW CALCULATOR ----
+// ---- DD SECTION ----
+function renderDDSection() {
+  let ddList = state.ddDeals;
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    ddList = ddList.filter(dd => (dd.dealName||"").toLowerCase().includes(q) || (dd.address||"").toLowerCase().includes(q));
+  }
+  if (state.ddFilter !== "all") ddList = ddList.filter(dd => (dd.stage||"negotiation_psa") === state.ddFilter);
+
+  let h = `<div style="margin-bottom:20px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">`;
+  h += `<button class="view-btn ${state.ddFilter==='all'?'active':''}" data-dd-filter="all">All</button>`;
+  DD_STAGES.forEach(s => {
+    h += `<button class="view-btn ${state.ddFilter===s.id?'active':''}" data-dd-filter="${s.id}" style="${state.ddFilter===s.id?`background:${s.color}15;color:${s.color};border-color:${s.color}`:''}">${s.label}</button>`;
+  });
+  h += `<button class="view-btn" data-action="open-uwcalc" style="margin-left:auto;background:#FFFBEB;color:#D97706;border-color:#FDE68A">UW Calculator</button>`;
+  h += `</div>`;
+
+  if (!ddList.length) {
+    h += `<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">No DD checklists</p><p style="font-size:13px;margin-top:4px">Deals move here when LOI is accepted</p></div>`;
+    return h;
+  }
+
+  h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">`;
+  ddList.forEach(dd => {
+    const allTasks = dd.tasks || [];
+    const done = allTasks.filter(t => t.completed).length;
+    const tot = allTasks.length;
+    const pct = tot ? Math.round(done/tot*100) : 0;
+    const dtc = dd.closingDate ? Math.ceil((new Date(dd.closingDate+"T00:00:00") - new Date()) / 864e5) : null;
+    const ddStg = DD_STAGES.find(s => s.id === (dd.stage||"negotiation_psa")) || DD_STAGES[0];
+    const isExpanded = state.selectedDD === dd.id;
+
+    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;border-left:4px solid ${ddStg.color};overflow:hidden;cursor:pointer" data-dd-id="${dd.id}">`;
+    h += `<div style="padding:16px">`;
+    h += `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><div><div style="font-size:14px;font-weight:700;color:var(--text)">${esc(dd.dealName)}</div>`;
+    if(dd.address)h+=`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(dd.address)}</div>`;
+    h += `</div><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div>`;
+    
+    // Progress bar
+    h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="flex:1;height:6px;background:var(--border-light);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct===100?'#10B981':'#3B82F6'};border-radius:3px"></div></div><span style="font-size:11px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${pct}%</span></div>`;
+    
+    // Meta
+    h += `<div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted)"><span>${done}/${tot} complete</span>`;
+    if(dtc!==null)h+=`<span style="color:${dtc<14?'#EF4444':'var(--text-muted)'};font-weight:${dtc<14?'600':'400'}">${dtc>0?dtc+' days to close':'Past closing'}</span>`;
+    h += `</div>`;
+    
+    // Folder link
+    if(dd.folderLink)h+=`<div style="margin-top:8px"><a href="${esc(dd.folderLink)}" target="_blank" style="font-size:11px;color:#3B82F6;text-decoration:none;font-weight:500" onclick="event.stopPropagation()">Open Deal Folder ↗</a></div>`;
+
+    // Expanded task list
+    if(isExpanded){
+      h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
+      allTasks.forEach(t => {
+        h += `<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'};flex-shrink:0">${t.completed?'✓':'○'}</span><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span></div>`;
+      });
+      h += `</div>`;
+    }
+
+    h += `</div></div>`;
+  });
+  h += `</div>`;
+
+  // UW Calc modal
+  if(state.showUWCalc) h += renderUWCalcModal();
+
+  return h;
+}
+
+function wireDDEvents() {
+  document.querySelectorAll("[data-dd-filter]").forEach(btn => {
+    btn.addEventListener("click", () => { state.ddFilter = btn.dataset.ddFilter; render(); });
+  });
+  document.querySelectorAll("[data-dd-id]").forEach(card => {
+    card.addEventListener("click", (e) => {
+      if(e.target.tagName === "A") return;
+      state.selectedDD = state.selectedDD === card.dataset.ddId ? null : card.dataset.ddId;
+      render();
+    });
+  });
+  const uwBtn = document.querySelector("[data-action='open-uwcalc']");
+  if(uwBtn) uwBtn.addEventListener("click", () => { state.showUWCalc = !state.showUWCalc; render(); });
+}
+
+// ---- AM SECTION ----
+function renderAMSection() {
+  let propList = state.properties;
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    propList = propList.filter(p => (p.name||"").toLowerCase().includes(q) || (p.address||"").toLowerCase().includes(q) || (p.tenant||"").toLowerCase().includes(q));
+  }
+
+  if (!propList.length) {
+    return `<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">No properties yet</p><p style="font-size:13px;margin-top:4px">Properties appear here when deals close</p></div>`;
+  }
+
+  let h = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">`;
+  propList.forEach(p => {
+    const allTasks = p.tasks || [];
+    const activeTasks = allTasks.filter(t => !t.completed);
+    const overdueTasks = activeTasks.filter(t => t.dueDate && new Date(t.dueDate+"T00:00:00") < new Date());
+    const isExpanded = state.selectedProp === p.id;
+
+    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer" data-prop-id="${p.id}">`;
+    h += `<div style="padding:16px">`;
+    h += `<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.name)}</div>`;
+    if(p.address)h+=`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(p.address)}</div>`;
+    
+    // Stats
+    h += `<div style="display:flex;gap:16px;margin-top:10px;font-size:12px">`;
+    if(p.noi)h+=`<div><span style="color:var(--text-muted)">NOI</span> <span style="font-weight:700;color:var(--text)">${fmt$(p.noi)}</span></div>`;
+    if(p.tenant)h+=`<div><span style="color:var(--text-muted)">Tenant</span> <span style="font-weight:700;color:var(--text)">${esc(p.tenant)}</span></div>`;
+    h += `</div>`;
+    
+    // Task badges
+    if(activeTasks.length || overdueTasks.length){
+      h += `<div style="display:flex;gap:6px;margin-top:8px">`;
+      if(activeTasks.length)h+=`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#EFF6FF;color:#3B82F6;font-weight:600">${activeTasks.length} task${activeTasks.length>1?'s':''}</span>`;
+      if(overdueTasks.length)h+=`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#FEF2F2;color:#EF4444;font-weight:600">${overdueTasks.length} overdue</span>`;
+      h += `</div>`;
+    }
+
+    // Expanded task list
+    if(isExpanded && allTasks.length){
+      h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
+      allTasks.forEach(t => {
+        const pr = PRIORITIES[t.priority] || PRIORITIES.medium;
+        const isOverdue = !t.completed && t.dueDate && new Date(t.dueDate+"T00:00:00") < new Date();
+        h += `<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'};flex-shrink:0">${t.completed?'✓':'○'}</span><div style="flex:1"><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span>`;
+        if(t.dueDate)h+=`<span style="font-size:10px;color:${isOverdue?'#EF4444':'var(--text-muted)'};margin-left:8px">${t.dueDate}</span>`;
+        h += `</div><span style="font-size:9px;color:${pr.color};font-weight:600">${pr.label}</span></div>`;
+      });
+      h += `</div>`;
+    }
+
+    h += `</div></div>`;
+  });
+  h += `</div>`;
+  return h;
+}
+
+function wireAMEvents() {
+  document.querySelectorAll("[data-prop-id]").forEach(card => {
+    card.addEventListener("click", () => {
+      state.selectedProp = state.selectedProp === card.dataset.propId ? null : card.dataset.propId;
+      render();
+    });
+  });
+}
+
+// ---- UW CALC MODAL (for DD section) ----
+function renderUWCalcModal() {
+  const u = state.uwCalc || { price:"", sqft:"", rentPsf:"", vacancy:"8", expenseRatio:"35", targetCap:"7.5" };
+  state.uwCalc = u;
+  const price = parseFloat(u.price)||0;
+  const sf = parseFloat(u.sqft)||0;
+  const rent = parseFloat(u.rentPsf)||0;
+  const vac = parseFloat(u.vacancy)||0;
+  const exp = parseFloat(u.expenseRatio)||0;
+  const cap = parseFloat(u.targetCap)||0;
+  const canCalc = sf && rent && cap;
+  const gpr = sf * rent;
+  const egi = gpr * (1 - vac/100);
+  const noi = egi * (1 - exp/100);
+  const impliedValue = cap > 0 ? noi / (cap/100) : 0;
+  const valuePsf = sf > 0 ? impliedValue / sf : 0;
+  const spread = price > 0 ? impliedValue - price : 0;
+  const spreadPct = price > 0 ? ((impliedValue/price)-1)*100 : 0;
+  const impliedCap = price > 0 ? (noi/price)*100 : 0;
+
+  let h = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center" id="uwcalc-overlay">`;
+  h += `<div style="background:white;border-radius:16px;max-width:580px;width:90%;padding:24px;max-height:90vh;overflow-y:auto" onclick="event.stopPropagation()">`;
+  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h2 style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:800">Quick UW Calculator</h2><button id="close-uwcalc" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted)">✕</button></div>`;
+  
+  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">`;
+  [["Asking Price","uw-d-price",u.price,"4850000"],["Building SF","uw-d-sqft",u.sqft,"14820"],
+   ["Rent / SF","uw-d-rent",u.rentPsf,"18.00"],["Vacancy %","uw-d-vac",u.vacancy,"8"],
+   ["Expense Ratio %","uw-d-exp",u.expenseRatio,"35"],["Target Cap %","uw-d-cap",u.targetCap,"7.5"]
+  ].forEach(([label,id,val,ph]) => {
+    h += `<div><label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">${label}</label><input type="number" id="${id}" value="${val}" placeholder="${ph}" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:'DM Sans',sans-serif;box-sizing:border-box"></div>`;
+  });
+  h += `</div>`;
+
+  if (canCalc) {
+    const spreadColor = spread >= 0 ? "#10B981" : "#EF4444";
+    const spreadSign = spread >= 0 ? "+" : "";
+    h += `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;text-align:center">`;
+    [["GPR",fmt$(Math.round(gpr))],["EGI",fmt$(Math.round(egi))],["NOI",fmt$(Math.round(noi))],
+     ["Implied Value",fmt$(Math.round(impliedValue))],["Value/SF","$"+Math.round(valuePsf)],["Implied Cap",impliedCap.toFixed(2)+"%"]
+    ].forEach(([l,v]) => {
+      h += `<div style="background:var(--bg);border-radius:8px;padding:10px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">${l}</div><div style="font-size:16px;font-weight:800;color:var(--text);margin-top:3px">${v}</div></div>`;
+    });
+    h += `</div>`;
+    if (price > 0) {
+      h += `<div style="margin-top:12px;text-align:center;background:${spread>=0?'#F0FDF4':'#FEF2F2'};border-radius:8px;padding:12px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Spread vs Asking</div><div style="font-size:20px;font-weight:800;margin-top:3px;color:${spreadColor}">${spreadSign}${fmt$(Math.round(spread))} (${spreadSign}${spreadPct.toFixed(1)}%)</div></div>`;
+    }
+    h += `</div>`;
+  } else {
+    h += `<div style="margin-top:16px;text-align:center;color:var(--text-muted);font-size:12px;padding:16px 0">Enter Rent/SF, Building SF, and Target Cap to see results</div>`;
+  }
+
+  h += `</div></div>`;
+  return h;
+}
+
+function wireUWCalcModal() {
+  const overlay = document.getElementById("uwcalc-overlay");
+  if(overlay) overlay.addEventListener("click", (e) => { if(e.target===overlay){state.showUWCalc=false;render();} });
+  const closeBtn = document.getElementById("close-uwcalc");
+  if(closeBtn) closeBtn.addEventListener("click", () => { state.showUWCalc=false; render(); });
+  ["uw-d-price","uw-d-sqft","uw-d-rent","uw-d-vac","uw-d-exp","uw-d-cap"].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener("input", () => {
+      const map = {"uw-d-price":"price","uw-d-sqft":"sqft","uw-d-rent":"rentPsf","uw-d-vac":"vacancy","uw-d-exp":"expenseRatio","uw-d-cap":"targetCap"};
+      if(!state.uwCalc) state.uwCalc = {price:"",sqft:"",rentPsf:"",vacancy:"8",expenseRatio:"35",targetCap:"7.5"};
+      state.uwCalc[map[id]] = el.value;
+      const activeId = document.activeElement?.id;
+      const cursorPos = document.activeElement?.selectionStart;
+      render();
+      if(activeId){const refocus=document.getElementById(activeId);if(refocus){refocus.focus();if(cursorPos!==undefined)refocus.setSelectionRange(cursorPos,cursorPos);}}
+    });
+  });
+}
+
+// ---- QUICK UW CALCULATOR (standalone - kept for backwards compat) ----
 function renderUWCalc() {
   const u = state.uwCalc || { price:"", sqft:"", rentPsf:"", vacancy:"8", expenseRatio:"35", targetCap:"7.5" };
   state.uwCalc = u;
