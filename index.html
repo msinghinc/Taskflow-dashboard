@@ -1172,9 +1172,29 @@ function renderDDSection() {
     // Folder link
     if(dd.folderLink)h+=`<div style="margin-top:8px"><a href="${esc(dd.folderLink)}" target="_blank" style="font-size:11px;color:#3B82F6;text-decoration:none;font-weight:500" onclick="event.stopPropagation()">Open Deal Folder ↗</a></div>`;
 
-    // Expanded task list
+    // Expanded task list + tenants
     if(isExpanded){
+      // Tenants
+      const tenants = dd.tenants || [];
+      if(tenants.length){
+        h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
+        h += `<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Tenants (${tenants.length})</div>`;
+        h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px">`;
+        tenants.forEach(t => {
+          const typeColor = t.isVacant ? "#EF4444" : t.leaseType==="nnn" ? "#6366F1" : "#10B981";
+          const typeLabel = t.isVacant ? "VACANT" : (t.leaseType||"").toUpperCase();
+          h += `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border-radius:6px;font-size:12px">`;
+          h += `<span style="font-size:9px;padding:2px 5px;border-radius:3px;background:${typeColor}15;color:${typeColor};font-weight:700;flex-shrink:0">${typeLabel}</span>`;
+          h += `<div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}</div>`;
+          h += `<div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}${!t.isVacant&&t.rentPerSf?' · $'+t.rentPerSf+'/SF':''}</div></div>`;
+          if(t.subfolderLink)h+=`<a href="${esc(t.subfolderLink)}" target="_blank" style="font-size:10px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">📁</a>`;
+          h += `</div>`;
+        });
+        h += `</div></div>`;
+      }
+      // Tasks
       h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
+      h += `<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">DD Checklist</div>`;
       allTasks.forEach(t => {
         h += `<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'};flex-shrink:0">${t.completed?'✓':'○'}</span><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span></div>`;
       });
