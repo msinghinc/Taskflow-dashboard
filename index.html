@@ -702,12 +702,15 @@ function render() {
     h += `<div class="main">` + renderDDSection() + `</div>`;
   } else if (state.section === "am") {
     h += `<div class="main">` + renderAMSection() + `</div>`;
+  } else if (state.section === "contacts") {
+    h += `<div class="main">` + renderContactsSection() + `</div>`;
   }
   app.innerHTML = h;
   wireHeaderEvents();
   wireEvents();
   if (state.section === "dd") { wireDDEvents(); if(state.showUWCalc) wireUWCalcModal(); }
   if (state.section === "am") wireAMEvents();
+  if (state.section === "contacts") wireContactsEvents();
 }
 
 function renderLogin() {
@@ -735,6 +738,7 @@ function renderHeader() {
         <button class="view-btn ${state.section==='acquisitions'?'active':''}" data-section="acquisitions">Acquisitions</button>
         <button class="view-btn ${state.section==='dd'?'active':''}" data-section="dd">DD</button>
         <button class="view-btn ${state.section==='am'?'active':''}" data-section="am">AM</button>
+        <button class="view-btn ${state.section==='contacts'?'active':''}" data-section="contacts">Contacts</button>
       </div>
       ${subToggle}
     </div>
@@ -1000,6 +1004,123 @@ function wireEvents() {
   }
   const closeBtn = document.getElementById("modal-close");
   if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
+}
+
+// ---- CONTACTS SECTION ----
+function getContacts() {
+  const contacts = [];
+  // Pull broker contacts from deals
+  state.deals.forEach(d => {
+    if (!d.broker && !d.brokerContact && !d.brokerPhone && !d.brokerEmail) return;
+    const name = d.brokerContact || d.broker || "";
+    if (!name) return;
+    // Check if contact already exists (same phone or email)
+    const existing = contacts.find(c => 
+      (c.phone && d.brokerPhone && c.phone === d.brokerPhone) ||
+      (c.email && d.brokerEmail && c.email === d.brokerEmail) ||
+      (c.name === name && c.company === d.broker)
+    );
+    if (existing) {
+      if (!existing.deals.find(dl => dl.id === d.id)) {
+        existing.deals.push({ id: d.id, name: d.name, stage: d.stage });
+      }
+    } else {
+      contacts.push({
+        id: "c-" + d.id,
+        type: "broker",
+        name: name,
+        company: d.broker || "",
+        phone: d.brokerPhone || "",
+        email: d.brokerEmail || "",
+        deals: [{ id: d.id, name: d.name, stage: d.stage }]
+      });
+    }
+  });
+  return contacts;
+}
+
+function renderContactsSection() {
+  let contacts = getContacts();
+  
+  // Search filter
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    contacts = contacts.filter(c => 
+      (c.name||"").toLowerCase().includes(q) || 
+      (c.company||"").toLowerCase().includes(q) || 
+      (c.phone||"").includes(q) || 
+      (c.email||"").toLowerCase().includes(q) ||
+      c.deals.some(d => (d.name||"").toLowerCase().includes(q))
+    );
+  }
+
+  let h = `<div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">`;
+  h += `<div><span style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:800;color:var(--text)">Contacts</span>`;
+  h += `<span style="font-size:12px;color:var(--text-muted);margin-left:12px">${contacts.length} broker${contacts.length!==1?'s':''}</span></div>`;
+  h += `</div>`;
+
+  if (!contacts.length) {
+    h += `<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">${state.search?"No matching contacts":"No contacts yet"}</p><p style="font-size:13px;margin-top:4px">Broker contacts appear here from your deals</p></div>`;
+    return h;
+  }
+
+  // Contact cards grid
+  h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">`;
+  contacts.forEach(c => {
+    const isExpanded = state.selectedContact === c.id;
+    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer;transition:all 0.12s${isExpanded?';box-shadow:0 4px 16px rgba(0,0,0,0.08)':''}" data-contact-id="${c.id}">`;
+    h += `<div style="padding:16px">`;
+    
+    // Name + company
+    h += `<div style="display:flex;justify-content:space-between;align-items:flex-start">`;
+    h += `<div><div style="font-size:15px;font-weight:700;color:var(--text)">${esc(c.name)}</div>`;
+    if (c.company && c.company !== c.name) h += `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(c.company)}</div>`;
+    h += `</div>`;
+    h += `<span style="font-size:9px;padding:3px 8px;border-radius:4px;background:#6366F115;color:#6366F1;font-weight:600;text-transform:uppercase">Broker</span>`;
+    h += `</div>`;
+
+    // Phone + email
+    h += `<div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">`;
+    if (c.phone) {
+      h += `<a href="tel:${esc(c.phone)}" style="font-size:12px;color:#3B82F6;text-decoration:none;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">📞 ${esc(c.phone)}</a>`;
+    }
+    if (c.email) {
+      const gmailUrl = "https://mail.google.com/mail/?view=cm&to=" + encodeURIComponent(c.email);
+      h += `<a href="${gmailUrl}" target="_blank" style="font-size:12px;color:#3B82F6;text-decoration:none;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">✉ ${esc(c.email)}</a>`;
+    }
+    h += `</div>`;
+
+    // Deal count badge
+    h += `<div style="margin-top:10px"><span style="font-size:10px;padding:2px 8px;border-radius:4px;background:var(--bg);color:var(--text-muted);font-weight:600">${c.deals.length} deal${c.deals.length!==1?'s':''}</span></div>`;
+
+    // Expanded — show linked deals
+    if (isExpanded) {
+      h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
+      h += `<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Linked Deals</div>`;
+      c.deals.forEach(d => {
+        const s = stg(d.stage);
+        h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-light)">`;
+        h += `<span style="font-size:12px;font-weight:500;color:var(--text)">${esc(d.name)}</span>`;
+        h += `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:${s.color}15;color:${s.color};font-weight:600">${s.label}</span>`;
+        h += `</div>`;
+      });
+      h += `</div>`;
+    }
+
+    h += `</div></div>`;
+  });
+  h += `</div>`;
+  return h;
+}
+
+function wireContactsEvents() {
+  document.querySelectorAll("[data-contact-id]").forEach(card => {
+    card.addEventListener("click", (e) => {
+      if (e.target.tagName === "A") return;
+      state.selectedContact = state.selectedContact === card.dataset.contactId ? null : card.dataset.contactId;
+      render();
+    });
+  });
 }
 
 // ---- DD SECTION ----
