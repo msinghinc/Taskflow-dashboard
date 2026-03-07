@@ -636,7 +636,8 @@ async function loadDeals() {
     state.ddDeals = ddData.values.slice(1).map(row => {
       const obj = {};
       ddHeaders.forEach((h, i) => { obj[h] = row[i] || ""; });
-      obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : [];
+      try { obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : []; } catch(e) { obj.tasks = []; }
+      try { obj.tenants = obj.tenants ? JSON.parse(obj.tenants) : []; } catch(e) { obj.tenants = []; }
       return obj;
     });
   } else { state.ddDeals = []; }
