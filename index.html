@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CREFlow Dashboard</title>
+<title>TaskFlow Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@600;700;800;900&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
@@ -494,12 +494,12 @@ tbody td {
 
 <script>
 // ============================================================
-// CREFlow Dashboard
+// TaskFlow Dashboard
 // Reads from the same Google Sheet the extension syncs to
 // ============================================================
 
 const CLIENT_ID = "259209463080-lv24g90qhqmh3mskh4c17iu16b4glq9n.apps.googleusercontent.com";
-const SCOPES = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
 const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 
 const STAGES = [
@@ -507,9 +507,13 @@ const STAGES = [
   { id: "underwriting", label: "Underwriting", color: "#E8A838" },
   { id: "loi", label: "LOI Submitted", color: "#3B82F6" },
   { id: "loi_accepted", label: "LOI Accepted", color: "#0EA5E9" },
-  { id: "psa", label: "Under PSA", color: "#8B5CF6" },
-  { id: "closed", label: "Closed", color: "#10B981" },
   { id: "dead", label: "Dead", color: "#94A3B8" },
+];
+
+const DD_STAGES = [
+  { id: "negotiation_psa", label: "Negotiation PSA", color: "#8B5CF6" },
+  { id: "approved_psa", label: "Approved PSA", color: "#0EA5E9" },
+  { id: "closed", label: "Closed", color: "#10B981" },
 ];
 
 const PRIORITIES = {
@@ -518,17 +522,32 @@ const PRIORITIES = {
   low: { label: "Low", color: "#6B7280", bg: "#F9FAFB" },
 };
 
+const KPI_GOALS = {
+  findingProperties: 20, propertyUW: 10, loiCreated: 7, loiSent: 7,
+  callNewBrokers: 20, brokerFollowUp: 50, dealsClosed: 1
+};
+
 let state = {
   authenticated: false,
   accessToken: null,
   tokenClient: null,
   spreadsheetId: null,
   deals: [],
+  ddDeals: [],
+  properties: [],
+  section: "acquisitions",
   view: "kanban",
   search: "",
   sortCol: null,
   sortDir: "asc",
   selectedDeal: null,
+  selectedDD: null,
+  ddDetailId: null,
+  selectedProp: null,
+  selectedContact: null,
+  ddFilter: "all",
+  showUWCalc: false,
+  kpiPeriod: "week",
   loading: false,
 };
 
@@ -774,6 +793,7 @@ function renderAcqKPIs() {
   h += `</div>`; // close health row
 
   h += `</div>`; // close outer wrapper
+  h += renderKPITracker();
   return h;
 }
 
@@ -804,16 +824,16 @@ async function apiGet(url) {
 }
 
 async function findSpreadsheet() {
-  // Search Drive for the CREFlow spreadsheet
+  // Search Drive for the TaskFlow spreadsheet
   const searchUrl = "https://www.googleapis.com/drive/v3/files?q=" +
-    encodeURIComponent("name='CREFlow Data' and mimeType='application/vnd.google-apps.spreadsheet'") +
+    encodeURIComponent("name='TaskFlow Data' and mimeType='application/vnd.google-apps.spreadsheet'") +
     "&fields=files(id,name)&orderBy=modifiedTime desc";
 
   // Need drive.readonly scope too — but we only have sheets.readonly
   // Instead, try to load from localStorage or prompt for spreadsheet ID
   let ssId = localStorage.getItem("creflow_spreadsheet_id");
   if (!ssId) {
-    ssId = prompt("Enter your CREFlow spreadsheet ID.\n\nYou can find it in the URL of your CREFlow Data spreadsheet:\nhttps://docs.google.com/spreadsheets/d/{THIS_PART}/edit");
+    ssId = prompt("Enter your TaskFlow spreadsheet ID.\n\nYou can find it in the URL of your TaskFlow Data spreadsheet:\nhttps://docs.google.com/spreadsheets/d/{THIS_PART}/edit");
     if (ssId) localStorage.setItem("creflow_spreadsheet_id", ssId);
   }
   state.spreadsheetId = ssId;
@@ -825,27 +845,54 @@ async function loadDeals() {
   render();
 
   const data = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions");
-  if (!data || !data.values || data.values.length < 2) { state.deals = []; state.loading = false; return; }
+  if (data && data.values && data.values.length >= 2) {
+    const headers = data.values[0];
+    state.deals = data.values.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i] || ""; });
+      obj.askingPrice = parseFloat(obj.askingPrice) || 0;
+      obj.noi = parseFloat(obj.noi) || 0;
+      obj.capRate = parseFloat(obj.capRate) || 0;
+      obj.sqft = parseFloat(obj.sqft) || 0;
+      obj.createdAt = parseInt(obj.createdAt) || Date.now();
+      obj.lastActivity = parseInt(obj.lastActivity) || Date.now();
+      obj.uwGeneratedDate = parseInt(obj.uwGeneratedDate) || 0;
+      obj.loiGeneratedDate = parseInt(obj.loiGeneratedDate) || 0;
+      obj.stageChangedDate = parseInt(obj.stageChangedDate) || 0;
+      obj.sfLoiLink = obj.sfLoiLink || "";
+      obj.hotList = obj.hotList === "true" || obj.hotList === true;
+      obj.brokerReached = obj.brokerReached === "true" || obj.brokerReached === true;
+      try { obj.callLog = obj.callLog ? JSON.parse(obj.callLog) : []; } catch(e) { obj.callLog = []; }
+      return obj;
+    });
+  } else { state.deals = []; }
 
-  const headers = data.values[0];
-  state.deals = data.values.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] || ""; });
-    obj.askingPrice = parseFloat(obj.askingPrice) || 0;
-    obj.noi = parseFloat(obj.noi) || 0;
-    obj.capRate = parseFloat(obj.capRate) || 0;
-    obj.sqft = parseFloat(obj.sqft) || 0;
-    obj.createdAt = parseInt(obj.createdAt) || Date.now();
-    obj.lastActivity = parseInt(obj.lastActivity) || Date.now();
-    obj.uwGeneratedDate = parseInt(obj.uwGeneratedDate) || 0;
-    obj.loiGeneratedDate = parseInt(obj.loiGeneratedDate) || 0;
-    obj.stageChangedDate = parseInt(obj.stageChangedDate) || 0;
-    obj.sfLoiLink = obj.sfLoiLink || "";
-    obj.hotList = obj.hotList === "true" || obj.hotList === true;
-    obj.brokerReached = obj.brokerReached === "true" || obj.brokerReached === true;
-    try { obj.callLog = obj.callLog ? JSON.parse(obj.callLog) : []; } catch(e) { obj.callLog = []; }
-    return obj;
-  });
+  // Load Due Diligence
+  const ddData = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence");
+  if (ddData && ddData.values && ddData.values.length >= 2) {
+    const ddH = ddData.values[0];
+    state.ddDeals = ddData.values.slice(1).map(row => {
+      const obj = {};
+      ddH.forEach((h, i) => { obj[h] = row[i] || ""; });
+      try { obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : []; } catch(e) { obj.tasks = []; }
+      try { obj.tenants = obj.tenants ? JSON.parse(obj.tenants) : []; } catch(e) { obj.tenants = []; }
+      return obj;
+    });
+  } else { state.ddDeals = []; }
+
+  // Load Asset Management
+  const amData = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/AssetManagement");
+  if (amData && amData.values && amData.values.length >= 2) {
+    const amH = amData.values[0];
+    state.properties = amData.values.slice(1).map(row => {
+      const obj = {};
+      amH.forEach((h, i) => { obj[h] = row[i] || ""; });
+      obj.noi = parseFloat(obj.noi) || 0;
+      try { obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : []; } catch(e) { obj.tasks = []; }
+      return obj;
+    });
+  } else { state.properties = []; }
+
   state.loading = false;
 }
 
@@ -883,59 +930,75 @@ function render() {
   if (state.loading) { app.innerHTML = renderHeader() + `<div class="loading">Loading deals...</div>`; wireHeaderEvents(); return; }
 
   let h = renderHeader();
-  if (state.view === "uwcalc") {
-    h += `<div class="main">` + renderUWCalc() + `</div>`;
-  } else {
+  if (state.section === "acquisitions") {
     h += renderStats();
     h += renderAcqKPIs();
     h += `<div class="main">`;
     if (state.view === "kanban") h += renderKanban();
     else h += renderTable();
     h += `</div>`;
+    if (state.selectedDeal) h += renderModal(state.selectedDeal);
+  } else if (state.section === "dd") {
+    h += `<div class="main">` + renderDDSection() + `</div>`;
+  } else if (state.section === "am") {
+    h += `<div class="main">` + renderAMSection() + `</div>`;
+  } else if (state.section === "contacts") {
+    h += `<div class="main">` + renderContactsSection() + `</div>`;
   }
-  if (state.selectedDeal) h += renderModal(state.selectedDeal);
   app.innerHTML = h;
   wireHeaderEvents();
   wireEvents();
-  if (state.view === "uwcalc") wireUWCalcEvents();
+  if (state.section === "dd") wireDDEvents();
+  if (state.section === "am") wireAMEvents();
+  if (state.section === "contacts") wireContactsEvents();
 }
 
 function renderLogin() {
   app.innerHTML = `<div class="login-container">
-    <h1>CREFlow</h1>
+    <h1>TaskFlow</h1>
     <p>Deal pipeline dashboard</p>
     <button class="login-btn" id="login-btn">Connect Google Account</button>
-    <span class="login-note">Read-only access to your CREFlow spreadsheet</span>
+    <span class="login-note">Read-only access to your TaskFlow spreadsheet</span>
   </div>`;
   document.getElementById("login-btn").addEventListener("click", doLogin);
 }
 
 function renderHeader() {
+  let subToggle = "";
+  if (state.section === "acquisitions") {
+    subToggle = `<div class="view-toggle" style="margin-left:12px">
+      <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
+      <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
+    </div>`;
+  }
   return `<div class="header"><div class="header-inner">
     <div class="header-left">
-      <h1>CREFlow</h1>
+      <h1>TaskFlow</h1>
       <div class="view-toggle">
-        <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
-        <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
-        <button class="view-btn ${state.view==='uwcalc'?'active':''}" data-view="uwcalc">UW Calc</button>
+        <button class="view-btn ${state.section==='acquisitions'?'active':''}" data-section="acquisitions">Acquisitions</button>
+        <button class="view-btn ${state.section==='dd'?'active':''}" data-section="dd">DD</button>
+        <button class="view-btn ${state.section==='am'?'active':''}" data-section="am">AM</button>
+        <button class="view-btn ${state.section==='contacts'?'active':''}" data-section="contacts">Contacts</button>
       </div>
+      ${subToggle}
     </div>
     <div class="header-right">
-      <input type="text" class="search-input" id="search-input" placeholder="Search deals..." value="${esc(state.search)}">
+      <input type="text" class="search-input" id="search-input" placeholder="Search..." value="${esc(state.search)}">
       <button class="login-btn" style="padding:8px 16px;font-size:12px" id="refresh-btn">↻ Refresh</button>
     </div>
   </div></div>`;
 }
 
 function wireHeaderEvents() {
+  document.querySelectorAll("[data-section]").forEach(btn => {
+    btn.addEventListener("click", () => { state.section = btn.dataset.section; state.search = ""; state.ddDetailId = null; render(); });
+  });
   document.querySelectorAll("[data-view]").forEach(btn => {
     btn.addEventListener("click", () => { state.view = btn.dataset.view; render(); });
   });
   const searchEl = document.getElementById("search-input");
   if (searchEl) {
     searchEl.addEventListener("input", (e) => { state.search = e.target.value; render(); searchEl.focus(); });
-    // Restore cursor position
-    if (document.activeElement === searchEl) searchEl.setSelectionRange(searchEl.value.length, searchEl.value.length);
   }
   const refreshBtn = document.getElementById("refresh-btn");
   if (refreshBtn) refreshBtn.addEventListener("click", async () => { await loadDeals(); render(); });
@@ -1180,6 +1243,8 @@ function wireEvents() {
   }
   const closeBtn = document.getElementById("modal-close");
   if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
+  // KPI period toggle
+  document.querySelectorAll("[data-kpi-period]").forEach(btn=>{btn.addEventListener("click",()=>{state.kpiPeriod=btn.dataset.kpiPeriod;render();});});
 }
 
 // ---- QUICK UW CALCULATOR ----
@@ -1262,6 +1327,221 @@ function wireUWCalcEvents() {
     }
   });
 }
+
+// ---- SHEET WRITE FUNCTIONS ----
+async function saveDDToSheet() {
+  if (!state.spreadsheetId) return;
+  const headers = ["id","dealId","dealName","address","closingDate","stage","folderLink","uwLink","tasks","tenants"];
+  const values = [headers, ...state.ddDeals.map(d => headers.map(h => {
+    const val = d[h]; if (val === undefined || val === null) return ""; if (typeof val === "object") return JSON.stringify(val); return String(val);
+  }))];
+  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence:clear", { method:"POST", headers:{"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"}, body:"{}" });
+  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence?valueInputOption=RAW", { method:"PUT", headers:{"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"}, body:JSON.stringify({values}) });
+}
+async function saveDealsToSheet() {
+  if (!state.spreadsheetId) return;
+  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink"];
+  const values = [headers, ...state.deals.map(d => headers.map(h => {
+    const val = d[h]; if (val === undefined || val === null) return ""; if (typeof val === "object") return JSON.stringify(val); return String(val);
+  }))];
+  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions:clear", { method:"POST", headers:{"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"}, body:"{}" });
+  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions?valueInputOption=RAW", { method:"PUT", headers:{"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"}, body:JSON.stringify({values}) });
+}
+
+// ---- KPI WEEKLY TRACKER ----
+function renderKPITracker() {
+  const now = new Date();
+  const getWeekStart = (d) => { const dt = new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate() - dt.getDay()); return dt; };
+  const periodStart = getWeekStart(now);
+  const periodEnd = new Date(periodStart.getTime() + 7*864e5);
+  let label = "This Week";
+  let filterFn = (ts) => ts >= periodStart.getTime() && ts < periodEnd.getTime();
+  let filterDate = (d) => { const dt = new Date(d+"T00:00:00"); return dt >= periodStart && dt < periodEnd; };
+
+  if (state.kpiPeriod === "month") {
+    const ms = new Date(now.getFullYear(), now.getMonth(), 1);
+    const me = new Date(now.getFullYear(), now.getMonth()+1, 1);
+    filterFn = (ts) => ts >= ms.getTime() && ts < me.getTime();
+    filterDate = (d) => { const dt = new Date(d+"T00:00:00"); return dt >= ms && dt < me; };
+    label = now.toLocaleString('default',{month:'long'}) + " " + now.getFullYear();
+  } else if (state.kpiPeriod === "quarter") {
+    const q = Math.floor(now.getMonth()/3);
+    const qs = new Date(now.getFullYear(), q*3, 1);
+    const qe = new Date(now.getFullYear(), q*3+3, 1);
+    filterFn = (ts) => ts >= qs.getTime() && ts < qe.getTime();
+    filterDate = (d) => { const dt = new Date(d+"T00:00:00"); return dt >= qs && dt < qe; };
+    label = "Q" + (q+1) + " " + now.getFullYear();
+  } else if (state.kpiPeriod === "year") {
+    const ys = new Date(now.getFullYear(), 0, 1);
+    const ye = new Date(now.getFullYear()+1, 0, 1);
+    filterFn = (ts) => ts >= ys.getTime() && ts < ye.getTime();
+    filterDate = (d) => { const dt = new Date(d+"T00:00:00"); return dt >= ys && dt < ye; };
+    label = now.getFullYear().toString();
+  }
+
+  // Calculate KPIs
+  const findingProps = state.deals.filter(d => d.createdAt && filterFn(d.createdAt)).length;
+  const propUW = state.deals.filter(d => d.uwGeneratedDate && filterFn(d.uwGeneratedDate)).length;
+  const loiCreated = state.deals.filter(d => d.loiGeneratedDate && filterFn(d.loiGeneratedDate)).length;
+  const loiSent = state.deals.filter(d => d.loiSentDate && filterDate(d.loiSentDate)).length;
+  let newBrokerCalls = 0, followUpCalls = 0;
+  state.deals.forEach(d => {
+    (d.callLog||[]).forEach((c,i) => {
+      if (c.time && filterFn(c.time)) { if(i===0) newBrokerCalls++; else followUpCalls++; }
+    });
+  });
+  const dealsClosed = state.deals.filter(d => d.stage==="loi_accepted" && d.stageChangedDate && filterFn(d.stageChangedDate)).length;
+  const loiCounter = state.deals.filter(d => d.stage==="underwriting" && d.stageChangedDate && filterFn(d.stageChangedDate) && d.loiLink).length;
+  const pctCountered = loiSent > 0 ? Math.round(loiCounter/loiSent*100) : 0;
+
+  const kpis = [
+    { label:"Finding Properties", actual:findingProps, goal:KPI_GOALS.findingProperties },
+    { label:"Property UW", actual:propUW, goal:KPI_GOALS.propertyUW },
+    { label:"LOI Created", actual:loiCreated, goal:KPI_GOALS.loiCreated },
+    { label:"LOI Sent", actual:loiSent, goal:KPI_GOALS.loiSent },
+    { label:"LOI Counter", actual:loiCounter, goal:null },
+    { label:"% Countered", actual:pctCountered+"%", goal:"80%+" },
+    { label:"New Broker Calls", actual:newBrokerCalls, goal:KPI_GOALS.callNewBrokers },
+    { label:"Broker Follow Up", actual:followUpCalls, goal:KPI_GOALS.brokerFollowUp },
+    { label:"Deals Closed", actual:dealsClosed, goal:KPI_GOALS.dealsClosed },
+  ];
+
+  // Grade
+  const graded = kpis.filter(k => k.goal && typeof k.goal === "number");
+  const grade = graded.length ? Math.round(graded.reduce((s,k) => s + Math.min(k.actual/k.goal, 1), 0) / graded.length * 100) : 0;
+  const gradeColor = grade >= 80 ? "#10B981" : grade >= 50 ? "#E8A838" : "#EF4444";
+
+  let h = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin:0 32px 16px">`;
+  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="display:flex;align-items:center;gap:12px"><span class="stat-label">Weekly Scorecard</span><span style="font-size:11px;color:var(--text-muted)">${label}</span></div>`;
+  h += `<div style="display:flex;align-items:center;gap:8px"><div style="display:flex;gap:2px">`;
+  ["week","month","quarter","year"].forEach(p => {
+    h += `<button data-kpi-period="${p}" style="padding:4px 10px;border:1px solid ${state.kpiPeriod===p?'#3B82F6':'var(--border)'};border-radius:6px;font-size:10px;cursor:pointer;background:${state.kpiPeriod===p?'#3B82F620':'transparent'};color:${state.kpiPeriod===p?'#3B82F6':'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${p.charAt(0).toUpperCase()+p.slice(1)}</button>`;
+  });
+  h += `</div><div style="text-align:center;min-width:60px"><div style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${gradeColor}">${grade}%</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Grade</div></div></div></div>`;
+
+  h += `<div style="display:grid;grid-template-columns:repeat(${kpis.length},1fr);gap:8px">`;
+  kpis.forEach(k => {
+    const pct = (k.goal && typeof k.goal === "number") ? Math.min(Math.round(k.actual/k.goal*100),100) : null;
+    const barColor = pct !== null ? (pct >= 80 ? "#10B981" : pct >= 50 ? "#E8A838" : "#EF4444") : "#3B82F6";
+    h += `<div style="text-align:center"><div style="font-size:16px;font-weight:800;font-family:'Outfit',sans-serif;color:var(--text)">${k.actual}</div>`;
+    if (k.goal && typeof k.goal === "number") {
+      h += `<div style="height:4px;background:var(--border-light);border-radius:2px;margin:4px 0;overflow:hidden"><div style="height:100%;width:${pct}%;background:${barColor};border-radius:2px"></div></div>`;
+      h += `<div style="font-size:8px;color:var(--text-muted)">/ ${k.goal}</div>`;
+    }
+    h += `<div style="font-size:9px;color:var(--text-muted);margin-top:2px">${k.label}</div></div>`;
+  });
+  h += `</div></div>`;
+  return h;
+}
+
+// ---- CONTACTS SECTION ----
+function getContacts() {
+  const contacts = [];
+  state.deals.forEach(d => {
+    if (!d.broker && !d.brokerContact && !d.brokerPhone && !d.brokerEmail) return;
+    const name = d.brokerContact || d.broker || "";
+    if (!name) return;
+    const existing = contacts.find(c => (c.phone && d.brokerPhone && c.phone === d.brokerPhone) || (c.email && d.brokerEmail && c.email === d.brokerEmail) || (c.name === name && c.company === d.broker));
+    if (existing) { if (!existing.deals.find(dl => dl.id === d.id)) existing.deals.push({ id:d.id, name:d.name, stage:d.stage }); }
+    else contacts.push({ id:"c-"+d.id, type:"broker", name, company:d.broker||"", phone:d.brokerPhone||"", email:d.brokerEmail||"", deals:[{id:d.id,name:d.name,stage:d.stage}] });
+  });
+  return contacts;
+}
+function renderContactsSection() {
+  let contacts = getContacts();
+  if (state.search) { const q=state.search.toLowerCase(); contacts=contacts.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.company||"").toLowerCase().includes(q)||(c.phone||"").includes(q)||(c.email||"").toLowerCase().includes(q)); }
+  let h = `<div style="margin-bottom:20px"><span style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:800;color:var(--text)">Contacts</span><span style="font-size:12px;color:var(--text-muted);margin-left:12px">${contacts.length} broker${contacts.length!==1?'s':''}</span></div>`;
+  if (!contacts.length) return h+`<div style="text-align:center;padding:60px 0;color:var(--text-muted)">No contacts found</div>`;
+  h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">`;
+  contacts.forEach(c => {
+    const isExp = state.selectedContact === c.id;
+    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;cursor:pointer;padding:16px" data-contact-id="${c.id}">`;
+    h += `<div style="display:flex;justify-content:space-between"><div><div style="font-size:15px;font-weight:700;color:var(--text)">${esc(c.name)}</div>`;
+    if(c.company&&c.company!==c.name)h+=`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(c.company)}</div>`;
+    h+=`</div><span style="font-size:9px;padding:3px 8px;border-radius:4px;background:#6366F115;color:#6366F1;font-weight:600">Broker</span></div>`;
+    h+=`<div style="display:flex;gap:16px;margin-top:10px">`;
+    if(c.phone)h+=`<a href="tel:${esc(c.phone)}" style="font-size:12px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">📞 ${esc(c.phone)}</a>`;
+    if(c.email)h+=`<a href="https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(c.email)}" target="_blank" style="font-size:12px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">✉ ${esc(c.email)}</a>`;
+    h+=`</div><div style="margin-top:10px"><span style="font-size:10px;padding:2px 8px;border-radius:4px;background:var(--bg);color:var(--text-muted);font-weight:600">${c.deals.length} deal${c.deals.length!==1?'s':''}</span></div>`;
+    if(isExp){h+=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;c.deals.forEach(d=>{const s=stg(d.stage);h+=`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light)"><span style="font-size:12px;color:var(--text)">${esc(d.name)}</span><span style="font-size:9px;padding:2px 6px;border-radius:3px;background:${s.color}15;color:${s.color};font-weight:600">${s.label}</span></div>`;});h+=`</div>`;}
+    h+=`</div>`;
+  });
+  h+=`</div>`;return h;
+}
+function wireContactsEvents(){document.querySelectorAll("[data-contact-id]").forEach(card=>{card.addEventListener("click",(e)=>{if(e.target.tagName==="A")return;state.selectedContact=state.selectedContact===card.dataset.contactId?null:card.dataset.contactId;render();});});}
+
+// ---- DD SECTION ----
+function renderDDSection() {
+  if (state.ddDetailId) { const dd=state.ddDeals.find(d=>d.id===state.ddDetailId); if(dd) return renderDDDetail(dd); }
+  let ddList = state.ddDeals.filter(dd=>(dd.stage||"negotiation_psa")!=="closed"&&(dd.stage||"negotiation_psa")!=="archived");
+  if(state.search){const q=state.search.toLowerCase();ddList=ddList.filter(dd=>(dd.dealName||"").toLowerCase().includes(q)||(dd.address||"").toLowerCase().includes(q));}
+  if(state.ddFilter!=="all")ddList=ddList.filter(dd=>(dd.stage||"negotiation_psa")===state.ddFilter);
+  let h=`<div style="margin-bottom:20px;display:flex;gap:8px;align-items:center">`;
+  h+=`<button class="view-btn ${state.ddFilter==='all'?'active':''}" data-dd-filter="all">All</button>`;
+  DD_STAGES.filter(s=>s.id!=="closed").forEach(s=>{h+=`<button class="view-btn ${state.ddFilter===s.id?'active':''}" data-dd-filter="${s.id}">${s.label}</button>`;});
+  h+=`</div>`;
+  if(!ddList.length)return h+`<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">No active DD checklists</p></div>`;
+  h+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">`;
+  ddList.forEach(dd=>{const tasks=dd.tasks||[];const done=tasks.filter(t=>t.completed).length;const tot=tasks.length;const pct=tot?Math.round(done/tot*100):0;const tenants=dd.tenants||[];const ddStg=DD_STAGES.find(s=>s.id===(dd.stage||"negotiation_psa"))||DD_STAGES[0];
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;border-left:4px solid ${ddStg.color};cursor:pointer" data-dd-detail="${dd.id}"><div style="padding:16px"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><div><div style="font-size:14px;font-weight:700;color:var(--text)">${esc(dd.dealName)}</div>${dd.address?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(dd.address)}</div>`:''}</div><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="flex:1;height:6px;background:var(--border-light);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct===100?'#10B981':'#3B82F6'};border-radius:3px"></div></div><span style="font-size:11px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${pct}%</span></div><div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted)"><span>${done}/${tot} tasks</span>${tenants.length?`<span>${tenants.length} tenants</span>`:''}</div></div></div>`;
+  });
+  h+=`</div>`;return h;
+}
+function renderDDDetail(dd){
+  const tasks=dd.tasks||[];const tenants=dd.tenants||[];const done=tasks.filter(t=>t.completed).length;const tot=tasks.length;const pct=tot?Math.round(done/tot*100):0;const ddStg=DD_STAGES.find(s=>s.id===(dd.stage||"negotiation_psa"))||DD_STAGES[0];
+  let h=`<div style="max-width:1100px;margin:0 auto">`;
+  h+=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px"><button data-action="dd-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'DM Sans',sans-serif">← Back</button><div style="flex:1"><div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(dd.dealName)}</div>${dd.address?`<div style="font-size:12px;color:var(--text-muted)">${esc(dd.address)}</div>`:''}</div><span style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:6px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div>`;
+  h+=`<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">`;
+  if(dd.folderLink)h+=`<a href="${esc(dd.folderLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#3B82F6;text-decoration:none;font-weight:500">📁 Deal Folder</a>`;
+  if(dd.uwLink)h+=`<a href="${esc(dd.uwLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#D97706;text-decoration:none;font-weight:500">📊 UW</a>`;
+  DD_STAGES.forEach(s=>{h+=`<button data-action="dd-set-stage" data-value="${s.id}" style="padding:6px 12px;border:1px solid ${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--border)'};border-radius:8px;font-size:11px;cursor:pointer;background:${(dd.stage||"negotiation_psa")===s.id?s.color+'15':'var(--bg-card)'};color:${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${s.label}</button>`;});
+  h+=`<button data-action="dd-move-to-acq" style="padding:6px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'DM Sans',sans-serif;margin-left:auto">↩ Move to Acquisitions</button></div>`;
+  // Tenants
+  if(tenants.length){
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text);margin-bottom:12px">Tenants (${tenants.length})</div>`;
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">`;
+    tenants.forEach((t,ti)=>{const tc=t.isVacant?"#EF4444":t.leaseType==="nnn"?"#6366F1":"#10B981";
+      h+=`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border-radius:6px;font-size:12px"><span style="font-size:9px;padding:2px 5px;border-radius:3px;background:${tc}15;color:${tc};font-weight:700">${t.isVacant?'VACANT':(t.leaseType||'').toUpperCase()}</span><div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}${!t.isVacant&&t.rentPerSf?' · $'+t.rentPerSf+'/SF':''}</div></div>${t.subfolderLink?`<a href="${esc(t.subfolderLink)}" target="_blank" style="font-size:10px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">📁</a>`:''}</div>`;
+    });
+    h+=`</div></div>`;
+  }
+  // DD Checklist
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">DD Checklist</div><span style="font-size:12px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${done}/${tot} (${pct}%)</span></div>`;
+  tasks.forEach((t,i)=>{h+=`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light)"><button data-action="dd-toggle-task" data-idx="${i}" style="background:none;border:none;cursor:pointer;font-size:16px">${t.completed?'✅':'⬜'}</button><span style="flex:1;font-size:13px;color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span><button data-action="dd-del-task" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px">✕</button></div>`;});
+  h+=`<button data-action="dd-add-task" style="margin-top:10px;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;color:var(--text-muted);font-family:'DM Sans',sans-serif;width:100%;text-align:center">+ Add Task</button></div>`;
+  h+=`</div>`;return h;
+}
+function wireDDEvents(){
+  document.querySelectorAll("[data-dd-detail]").forEach(card=>{card.addEventListener("click",()=>{state.ddDetailId=card.dataset.ddDetail;render();});});
+  document.querySelectorAll("[data-dd-filter]").forEach(btn=>{btn.addEventListener("click",()=>{state.ddFilter=btn.dataset.ddFilter;render();});});
+  const backBtn=document.querySelector("[data-action='dd-back']");if(backBtn)backBtn.addEventListener("click",()=>{state.ddDetailId=null;render();});
+  document.querySelectorAll("[data-action='dd-set-stage']").forEach(btn=>{btn.addEventListener("click",()=>{const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.stage=btn.dataset.value;saveDDToSheet();render();}});});
+  const moveBtn=document.querySelector("[data-action='dd-move-to-acq']");
+  if(moveBtn)moveBtn.addEventListener("click",async()=>{if(!confirm("Move back to Acquisitions?"))return;const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){const deal=state.deals.find(d=>d.id===dd.dealId);if(deal){deal.stage="underwriting";await saveDealsToSheet();}dd.stage="archived";await saveDDToSheet();state.ddDetailId=null;render();}});
+  document.querySelectorAll("[data-action='dd-toggle-task']").forEach(btn=>{btn.addEventListener("click",()=>{const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.tasks[parseInt(btn.dataset.idx)].completed=!dd.tasks[parseInt(btn.dataset.idx)].completed;saveDDToSheet();render();}});});
+  document.querySelectorAll("[data-action='dd-del-task']").forEach(btn=>{btn.addEventListener("click",()=>{const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.tasks.splice(parseInt(btn.dataset.idx),1);saveDDToSheet();render();}});});
+  const addTask=document.querySelector("[data-action='dd-add-task']");if(addTask)addTask.addEventListener("click",()=>{const text=prompt("New DD task:");if(!text?.trim())return;const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.tasks.push({id:Math.random().toString(36).slice(2,10),text:text.trim(),completed:false,dueDate:"",notes:""});saveDDToSheet();render();}});
+  // KPI period toggle
+  document.querySelectorAll("[data-kpi-period]").forEach(btn=>{btn.addEventListener("click",()=>{state.kpiPeriod=btn.dataset.kpiPeriod;render();});});
+}
+
+// ---- AM SECTION ----
+function renderAMSection(){
+  let propList=state.properties;
+  if(state.search){const q=state.search.toLowerCase();propList=propList.filter(p=>(p.name||"").toLowerCase().includes(q)||(p.address||"").toLowerCase().includes(q)||(p.tenant||"").toLowerCase().includes(q));}
+  if(!propList.length)return`<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">No properties yet</p></div>`;
+  let h=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">`;
+  propList.forEach(p=>{const tasks=p.tasks||[];const active=tasks.filter(t=>!t.completed);const overdue=active.filter(t=>t.dueDate&&new Date(t.dueDate+"T00:00:00")<new Date());const isExp=state.selectedProp===p.id;
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;cursor:pointer;padding:16px" data-prop-id="${p.id}">`;
+    h+=`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.name)}</div>${p.address?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(p.address)}</div>`:''}`;
+    h+=`<div style="display:flex;gap:16px;margin-top:10px;font-size:12px">${p.noi?`<div><span style="color:var(--text-muted)">NOI</span> <span style="font-weight:700;color:var(--text)">${fmt$(p.noi)}</span></div>`:''}${p.tenant?`<div><span style="color:var(--text-muted)">Tenant</span> <span style="font-weight:700;color:var(--text)">${esc(p.tenant)}</span></div>`:''}</div>`;
+    if(active.length||overdue.length){h+=`<div style="display:flex;gap:6px;margin-top:8px">${active.length?`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#EFF6FF;color:#3B82F6;font-weight:600">${active.length} tasks</span>`:''}${overdue.length?`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#FEF2F2;color:#EF4444;font-weight:600">${overdue.length} overdue</span>`:''}</div>`;}
+    if(isExp&&tasks.length){h+=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;tasks.forEach(t=>{h+=`<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'}">${t.completed?'✓':'○'}</span><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span></div>`;});h+=`</div>`;}
+    h+=`</div>`;
+  });
+  h+=`</div>`;return h;
+}
+function wireAMEvents(){document.querySelectorAll("[data-prop-id]").forEach(card=>{card.addEventListener("click",()=>{state.selectedProp=state.selectedProp===card.dataset.propId?null:card.dataset.propId;render();});});}
 
 // ---- INIT ----
 function waitForGIS() {
