@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TaskFlow Dashboard</title>
+<title>CREFlow Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@600;700;800;900&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
@@ -494,12 +494,12 @@ tbody td {
 
 <script>
 // ============================================================
-// TaskFlow Dashboard
+// CREFlow Dashboard
 // Reads from the same Google Sheet the extension syncs to
 // ============================================================
 
 const CLIENT_ID = "259209463080-lv24g90qhqmh3mskh4c17iu16b4glq9n.apps.googleusercontent.com";
-const SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets.readonly";
 const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 
 const STAGES = [
@@ -507,13 +507,9 @@ const STAGES = [
   { id: "underwriting", label: "Underwriting", color: "#E8A838" },
   { id: "loi", label: "LOI Submitted", color: "#3B82F6" },
   { id: "loi_accepted", label: "LOI Accepted", color: "#0EA5E9" },
-  { id: "dead", label: "Dead", color: "#94A3B8" },
-];
-
-const DD_STAGES = [
-  { id: "negotiation_psa", label: "Negotiation PSA", color: "#8B5CF6" },
-  { id: "approved_psa", label: "Approved PSA", color: "#0EA5E9" },
+  { id: "psa", label: "Under PSA", color: "#8B5CF6" },
   { id: "closed", label: "Closed", color: "#10B981" },
+  { id: "dead", label: "Dead", color: "#94A3B8" },
 ];
 
 const PRIORITIES = {
@@ -528,18 +524,11 @@ let state = {
   tokenClient: null,
   spreadsheetId: null,
   deals: [],
-  ddDeals: [],
-  properties: [],
-  section: "acquisitions",
   view: "kanban",
   search: "",
   sortCol: null,
   sortDir: "asc",
   selectedDeal: null,
-  selectedDD: null,
-  ddDetailId: null,
-  selectedProp: null,
-  ddFilter: "all",
   loading: false,
 };
 
@@ -561,6 +550,231 @@ function scoreColor(s) {
 function scoreBg(s) {
   s=parseFloat(s); if(!s)return"#F9FAFB";
   if(s<=3) return"#FEF2F2"; if(s<=6) return"#FFFBEB"; return"#F0FDF4";
+}
+
+// ---- DEAL HEALTH + KPI HELPERS ----
+const PRE_LOI_STAGES_DASH = ["prospecting", "underwriting"];
+
+function getDecayedScoreDash(deal) {
+  const raw = parseFloat(deal.score);
+  if (!raw) return { display: 0, original: 0, decay: 0 };
+  if (!PRE_LOI_STAGES_DASH.includes(deal.stage)) return { display: raw, original: raw, decay: 0 };
+  const created = parseInt(deal.createdAt) || Date.now();
+  const weeks = Math.floor((Date.now() - created) / (7 * 24 * 60 * 60 * 1000));
+  const decay = weeks * 0.5;
+  const display = Math.max(0, raw - decay);
+  return { display: Math.round(display * 10) / 10, original: raw, decay };
+}
+
+function calcDOMDash(listingDate) {
+  if (!listingDate) return null;
+  const listed = new Date(listingDate + "T00:00:00");
+  const now = new Date(); now.setHours(0,0,0,0);
+  const days = Math.floor((now - listed) / 864e5);
+  return days >= 0 ? days : null;
+}
+
+function getDealFlagsDash(d) {
+  if (d.stage === "dead" || d.stage === "loi_accepted") return [];
+  const now = Date.now();
+  const DAY = 864e5;
+  const flags = [];
+  const age = (now - (d.createdAt || now)) / DAY;
+  const callCount = (d.callLog || []).length;
+  const lastCall = callCount ? Math.max(...d.callLog.map(c => c.time || 0)) : 0;
+  const daysSinceLastCall = lastCall ? (now - lastCall) / DAY : age;
+  const stageAge = d.stageChangedDate ? (now - d.stageChangedDate) / DAY : age;
+  const uwAge = d.uwGeneratedDate ? (now - d.uwGeneratedDate) / DAY : 0;
+  const loiAge = d.loiGeneratedDate ? (now - d.loiGeneratedDate) / DAY : 0;
+  const loiSentAge = d.loiSentDate ? (now - new Date(d.loiSentDate + "T00:00:00").getTime()) / DAY : 0;
+
+  if (age > 2 && callCount === 0) flags.push({ type: "No broker call", msg: `📞 Call broker (${Math.floor(age)}d)` });
+  if (!d.brokerReached && age > 5 && callCount > 0 && callCount < 3) flags.push({ type: "Not reached", msg: `📞 Follow up (${Math.floor(age)}d)` });
+  if (d.stage === "prospecting" && stageAge > 4) flags.push({ type: "Stale prospecting", msg: `📋 Stale ${Math.floor(stageAge)}d` });
+  if (d.stage === "underwriting" && !d.uwLink && stageAge > 2) flags.push({ type: "No UW", msg: `📊 Gen UW (${Math.floor(stageAge)}d)` });
+  if (d.uwLink && !d.loiLink && uwAge > 2) flags.push({ type: "No LOI", msg: `📝 Gen LOI (${Math.floor(uwAge)}d)` });
+  if (d.loiLink && d.stage !== "loi" && d.stage !== "loi_accepted" && loiAge > 1) flags.push({ type: "LOI not sent", msg: `📤 Update stage (${Math.floor(loiAge)}d)` });
+  if (d.stage === "loi" && loiSentAge > 3) flags.push({ type: "LOI no response", msg: `📞 LOI follow up (${Math.floor(loiSentAge)}d)` });
+  const ds = getDecayedScoreDash(d);
+  if (ds.display > 0 && ds.display < 5 && PRE_LOI_STAGES_DASH.includes(d.stage)) flags.push({ type: "Low score", msg: `⚠️ Score ${ds.display}` });
+  if (callCount >= 3 && !d.brokerReached && daysSinceLastCall > 5) flags.push({ type: "Can't reach", msg: `🔄 New contact (${callCount} calls)` });
+  return flags;
+}
+
+function renderAcqKPIs() {
+  const all = state.deals;
+  const active = all.filter(d => d.stage !== "dead" && d.stage !== "loi_accepted");
+
+  // Pipeline summary
+  const totalValue = active.reduce((s, d) => s + d.askingPrice, 0);
+  const avgScore = active.length ? (active.reduce((s, d) => s + getDecayedScoreDash(d).display, 0) / active.length) : 0;
+  const domDeals = active.filter(d => calcDOMDash(d.listingDate) !== null);
+  const avgDOM = domDeals.length ? Math.round(domDeals.reduce((s, d) => s + calcDOMDash(d.listingDate), 0) / domDeals.length) : 0;
+  const hotCount = active.filter(d => d.hotList).length;
+
+  // Stage counts
+  const stageCounts = {};
+  ["prospecting","underwriting","loi","loi_accepted","psa","closed","dead"].forEach(s => {
+    stageCounts[s] = all.filter(d => d.stage === s).length;
+  });
+
+  // Conversion funnel
+  const prospCount = stageCounts["prospecting"] || 0;
+  const uwCount = stageCounts["underwriting"] || 0;
+  const loiCount = stageCounts["loi"] || 0;
+  const ddCount = stageCounts["loi_accepted"] || 0;
+  const pToUW = prospCount > 0 ? Math.round((uwCount / prospCount) * 100) : 0;
+  const uwToLOI = uwCount > 0 ? Math.round((loiCount / uwCount) * 100) : 0;
+  const loiToDD = loiCount > 0 ? Math.round((ddCount / loiCount) * 100) : 0;
+
+  // Stage velocity (avg days currently in each stage)
+  const now = Date.now();
+  const DAY = 864e5;
+  function avgStageAge(stageId) {
+    const inStage = active.filter(d => d.stage === stageId && d.stageChangedDate);
+    if (!inStage.length) return null;
+    return Math.round(inStage.reduce((s, d) => s + (now - d.stageChangedDate) / DAY, 0) / inStage.length);
+  }
+  const velProsp = avgStageAge("prospecting");
+  const velUW = avgStageAge("underwriting");
+  const velLOI = avgStageAge("loi");
+
+  // Deal health
+  const flaggedDeals = active.filter(d => getDealFlagsDash(d).length > 0);
+  const flagTypeCounts = {};
+  flaggedDeals.forEach(d => {
+    getDealFlagsDash(d).forEach(f => {
+      flagTypeCounts[f.type] = (flagTypeCounts[f.type] || 0) + 1;
+    });
+  });
+
+  // Stale deals (no activity 7+ days, not dead)
+  const staleDeals = active.filter(d => {
+    const la = d.lastActivity || d.createdAt || 0;
+    return (now - la) > 7 * DAY;
+  });
+
+  let h = `<div style="max-width:1440px;margin:16px auto 0;padding:0 32px">`;
+
+  // ---- Pipeline Summary ----
+  h += `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px">`;
+  [
+    ["Active Deals", active.length, "deals"],
+    ["Pipeline Value", fmt$(totalValue), "asking price"],
+    ["Avg Score", avgScore ? avgScore.toFixed(1) + "/10" : "—", "decayed"],
+    ["Avg DOM", avgDOM ? avgDOM + " days" : "—", "days on market"],
+    ["Hot List", hotCount, "this week"],
+  ].forEach(([label, val, sub]) => {
+    h += `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${val}</div><div class="stat-sub">${sub}</div></div>`;
+  });
+  h += `</div>`;
+
+  // ---- Conversion Funnel + Stage Velocity row ----
+  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">`;
+
+  // Conversion Funnel
+  h += `<div class="stat-card" style="padding:16px 18px">
+    <div class="stat-label" style="margin-bottom:12px">Conversion Funnel</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">`;
+  [
+    { label: "Prospecting", count: prospCount, color: "#6366F1" },
+    { label: "Underwriting", count: uwCount, color: "#E8A838", rate: pToUW },
+    { label: "LOI", count: loiCount, color: "#3B82F6", rate: uwToLOI },
+    { label: "DD", count: ddCount, color: "#0EA5E9", rate: loiToDD },
+  ].forEach((stage, i) => {
+    if (i > 0) {
+      h += `<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+        <span style="font-size:9px;font-weight:700;color:${stage.rate >= 50 ? '#10B981' : stage.rate >= 25 ? '#E8A838' : '#EF4444'}">${stage.rate}%</span>
+        <span style="color:#CBD5E1;font-size:14px">→</span>
+      </div>`;
+    }
+    h += `<div style="text-align:center">
+      <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${stage.color}">${stage.count}</div>
+      <div style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">${stage.label}</div>
+    </div>`;
+  });
+  h += `</div></div>`;
+
+  // Stage Velocity
+  h += `<div class="stat-card" style="padding:16px 18px">
+    <div class="stat-label" style="margin-bottom:12px">Stage Velocity (avg days in stage)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">`;
+  [
+    ["Prospecting", velProsp, "#6366F1"],
+    ["Underwriting", velUW, "#E8A838"],
+    ["LOI", velLOI, "#3B82F6"],
+  ].forEach(([label, val, color]) => {
+    h += `<div style="text-align:center;background:var(--border-light);border-radius:8px;padding:10px 8px">
+      <div style="font-size:16px;font-weight:800;font-family:'Outfit',sans-serif;color:${color}">${val !== null ? val + "d" : "—"}</div>
+      <div style="font-size:9px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-top:2px">${label}</div>
+    </div>`;
+  });
+  h += `</div></div>`;
+
+  h += `</div>`; // close grid
+
+  // ---- Deal Health + Stale Deals row ----
+  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">`;
+
+  // Deal Health
+  h += `<div style="background:var(--bg-card);border:1px solid ${flaggedDeals.length ? '#FECACA' : 'var(--border-light)'};border-radius:10px;padding:16px 18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stat-label" style="color:${flaggedDeals.length ? '#DC2626' : 'var(--text-muted)'}">Deal Health Flags</div>
+      <span style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${flaggedDeals.length ? '#DC2626' : '#10B981'}">${flaggedDeals.length}</span>
+    </div>`;
+
+  if (flaggedDeals.length) {
+    // Flag type breakdown
+    if (Object.keys(flagTypeCounts).length) {
+      h += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">`;
+      Object.entries(flagTypeCounts).forEach(([type, cnt]) => {
+        h += `<span style="font-size:9px;font-weight:600;padding:2px 6px;border-radius:4px;background:#FEF2F2;color:#DC2626;border:1px solid #FECACA">${type}: ${cnt}</span>`;
+      });
+      h += `</div>`;
+    }
+    // List flagged deals
+    h += `<div style="max-height:120px;overflow-y:auto">`;
+    flaggedDeals.slice(0, 8).forEach(d => {
+      const flags = getDealFlagsDash(d);
+      h += `<div style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:11px">
+        <span style="font-weight:600;color:var(--text)">${esc(d.name)}</span>
+        <span style="color:var(--text-muted)"> — ${flags.map(f => f.msg).join(", ")}</span>
+      </div>`;
+    });
+    if (flaggedDeals.length > 8) h += `<div style="font-size:10px;color:var(--text-muted);padding:4px 0">+${flaggedDeals.length - 8} more</div>`;
+    h += `</div>`;
+  } else {
+    h += `<div style="color:#10B981;font-size:12px;font-weight:600">All deals healthy ✓</div>`;
+  }
+  h += `</div>`;
+
+  // Stale Deals
+  h += `<div style="background:var(--bg-card);border:1px solid ${staleDeals.length ? '#FDE68A' : 'var(--border-light)'};border-radius:10px;padding:16px 18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stat-label" style="color:${staleDeals.length ? '#D97706' : 'var(--text-muted)'}">Stale Deals (7+ days no activity)</div>
+      <span style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${staleDeals.length ? '#D97706' : '#10B981'}">${staleDeals.length}</span>
+    </div>`;
+
+  if (staleDeals.length) {
+    h += `<div style="max-height:140px;overflow-y:auto">`;
+    staleDeals.forEach(d => {
+      const la = d.lastActivity || d.createdAt || 0;
+      const days = Math.floor((now - la) / DAY);
+      h += `<div style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:11px;display:flex;justify-content:space-between">
+        <span style="font-weight:600;color:var(--text)">${esc(d.name)}</span>
+        <span style="color:#D97706;font-weight:600;font-size:10px">${days}d idle</span>
+      </div>`;
+    });
+    h += `</div>`;
+  } else {
+    h += `<div style="color:#10B981;font-size:12px;font-weight:600">No stale deals ✓</div>`;
+  }
+  h += `</div>`;
+
+  h += `</div>`; // close health row
+
+  h += `</div>`; // close outer wrapper
+  return h;
 }
 
 // ---- AUTH ----
@@ -590,17 +804,17 @@ async function apiGet(url) {
 }
 
 async function findSpreadsheet() {
-  // Search Drive for the TaskFlow spreadsheet
+  // Search Drive for the CREFlow spreadsheet
   const searchUrl = "https://www.googleapis.com/drive/v3/files?q=" +
-    encodeURIComponent("name='TaskFlow Data' and mimeType='application/vnd.google-apps.spreadsheet'") +
+    encodeURIComponent("name='CREFlow Data' and mimeType='application/vnd.google-apps.spreadsheet'") +
     "&fields=files(id,name)&orderBy=modifiedTime desc";
 
   // Need drive.readonly scope too — but we only have sheets.readonly
   // Instead, try to load from localStorage or prompt for spreadsheet ID
-  let ssId = localStorage.getItem("taskflow_spreadsheet_id");
+  let ssId = localStorage.getItem("creflow_spreadsheet_id");
   if (!ssId) {
-    ssId = prompt("Enter your TaskFlow spreadsheet ID.\n\nYou can find it in the URL of your TaskFlow Data spreadsheet:\nhttps://docs.google.com/spreadsheets/d/{THIS_PART}/edit");
-    if (ssId) localStorage.setItem("taskflow_spreadsheet_id", ssId);
+    ssId = prompt("Enter your CREFlow spreadsheet ID.\n\nYou can find it in the URL of your CREFlow Data spreadsheet:\nhttps://docs.google.com/spreadsheets/d/{THIS_PART}/edit");
+    if (ssId) localStorage.setItem("creflow_spreadsheet_id", ssId);
   }
   state.spreadsheetId = ssId;
 }
@@ -610,114 +824,32 @@ async function loadDeals() {
   state.loading = true;
   render();
 
-  // Load Acquisitions
   const data = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions");
-  if (data && data.values && data.values.length >= 2) {
-    const headers = data.values[0];
-    state.deals = data.values.slice(1).map(row => {
-      const obj = {};
-      headers.forEach((h, i) => { obj[h] = row[i] || ""; });
-      obj.askingPrice = parseFloat(obj.askingPrice) || 0;
-      obj.noi = parseFloat(obj.noi) || 0;
-      obj.capRate = parseFloat(obj.capRate) || 0;
-      obj.sqft = parseFloat(obj.sqft) || 0;
-      obj.createdAt = parseInt(obj.createdAt) || Date.now();
-      obj.lastActivity = parseInt(obj.lastActivity) || Date.now();
-      obj.hotList = obj.hotList === "true" || obj.hotList === true;
-      obj.brokerReached = obj.brokerReached === "true" || obj.brokerReached === true;
-      obj.callLog = obj.callLog ? JSON.parse(obj.callLog) : [];
-      return obj;
-    });
-  } else { state.deals = []; }
+  if (!data || !data.values || data.values.length < 2) { state.deals = []; state.loading = false; return; }
 
-  // Load Due Diligence
-  const ddData = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence");
-  if (ddData && ddData.values && ddData.values.length >= 2) {
-    const ddHeaders = ddData.values[0];
-    state.ddDeals = ddData.values.slice(1).map(row => {
-      const obj = {};
-      ddHeaders.forEach((h, i) => { obj[h] = row[i] || ""; });
-      try { obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : []; } catch(e) { obj.tasks = []; }
-      try { obj.tenants = obj.tenants ? JSON.parse(obj.tenants) : []; } catch(e) { obj.tenants = []; }
-      return obj;
-    });
-  } else { state.ddDeals = []; }
-
-  // Load Asset Management
-  const amData = await apiGet(SHEETS_BASE + "/" + state.spreadsheetId + "/values/AssetManagement");
-  if (amData && amData.values && amData.values.length >= 2) {
-    const amHeaders = amData.values[0];
-    state.properties = amData.values.slice(1).map(row => {
-      const obj = {};
-      amHeaders.forEach((h, i) => { obj[h] = row[i] || ""; });
-      obj.noi = parseFloat(obj.noi) || 0;
-      obj.tasks = obj.tasks ? JSON.parse(obj.tasks) : [];
-      return obj;
-    });
-  } else { state.properties = []; }
-
+  const headers = data.values[0];
+  state.deals = data.values.slice(1).map(row => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = row[i] || ""; });
+    obj.askingPrice = parseFloat(obj.askingPrice) || 0;
+    obj.noi = parseFloat(obj.noi) || 0;
+    obj.capRate = parseFloat(obj.capRate) || 0;
+    obj.sqft = parseFloat(obj.sqft) || 0;
+    obj.createdAt = parseInt(obj.createdAt) || Date.now();
+    obj.lastActivity = parseInt(obj.lastActivity) || Date.now();
+    obj.uwGeneratedDate = parseInt(obj.uwGeneratedDate) || 0;
+    obj.loiGeneratedDate = parseInt(obj.loiGeneratedDate) || 0;
+    obj.stageChangedDate = parseInt(obj.stageChangedDate) || 0;
+    obj.sfLoiLink = obj.sfLoiLink || "";
+    obj.hotList = obj.hotList === "true" || obj.hotList === true;
+    obj.brokerReached = obj.brokerReached === "true" || obj.brokerReached === true;
+    try { obj.callLog = obj.callLog ? JSON.parse(obj.callLog) : []; } catch(e) { obj.callLog = []; }
+    return obj;
+  });
   state.loading = false;
 }
 
 // ---- FILTERING ----
-
-// ---- SHEET WRITE FUNCTIONS ----
-async function saveDDToSheet(dd) {
-  if (!state.spreadsheetId) return;
-  // Rebuild the entire DD sheet from state
-  const headers = ["id","dealId","dealName","address","closingDate","stage","folderLink","uwLink","tasks","tenants"];
-  const values = [headers, ...state.ddDeals.map(d => headers.map(h => {
-    const val = d[h];
-    if (val === undefined || val === null) return "";
-    if (typeof val === "object") return JSON.stringify(val);
-    return String(val);
-  }))];
-  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence:clear", {
-    method: "POST", headers: { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" }, body: "{}"
-  });
-  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/DueDiligence?valueInputOption=RAW", {
-    method: "PUT", headers: { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" },
-    body: JSON.stringify({ values })
-  });
-}
-
-async function saveDealsToSheet() {
-  if (!state.spreadsheetId) return;
-  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","listingDate","loiSentDate","brokerReached","callLog"];
-  const values = [headers, ...state.deals.map(d => headers.map(h => {
-    const val = d[h];
-    if (val === undefined || val === null) return "";
-    if (typeof val === "object") return JSON.stringify(val);
-    return String(val);
-  }))];
-  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions:clear", {
-    method: "POST", headers: { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" }, body: "{}"
-  });
-  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/Acquisitions?valueInputOption=RAW", {
-    method: "PUT", headers: { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" },
-    body: JSON.stringify({ values })
-  });
-}
-
-async function saveAMToSheet() {
-  if (!state.spreadsheetId) return;
-  const headers = ["id","name","address","propertyType","tenant","noi","leaseExpiry","tasks"];
-  const values = [headers, ...state.properties.map(d => headers.map(h => {
-    const val = d[h];
-    if (val === undefined || val === null) return "";
-    if (typeof val === "object") return JSON.stringify(val);
-    return String(val);
-  }))];
-  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/AssetManagement:clear", {
-    method: "POST", headers: { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" }, body: "{}"
-  });
-  await fetch(SHEETS_BASE + "/" + state.spreadsheetId + "/values/AssetManagement?valueInputOption=RAW", {
-    method: "PUT", headers: { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" },
-    body: JSON.stringify({ values })
-  });
-}
-
-// ---- FILTERING (Acquisitions) ----
 function filteredDeals() {
   let list = state.deals;
   if (state.search) {
@@ -751,74 +883,58 @@ function render() {
   if (state.loading) { app.innerHTML = renderHeader() + `<div class="loading">Loading deals...</div>`; wireHeaderEvents(); return; }
 
   let h = renderHeader();
-  if (state.section === "acquisitions") {
+  if (state.view === "uwcalc") {
+    h += `<div class="main">` + renderUWCalc() + `</div>`;
+  } else {
     h += renderStats();
+    h += renderAcqKPIs();
     h += `<div class="main">`;
     if (state.view === "kanban") h += renderKanban();
     else h += renderTable();
     h += `</div>`;
-    if (state.selectedDeal) h += renderModal(state.selectedDeal);
-  } else if (state.section === "dd") {
-    h += `<div class="main">` + renderDDSection() + `</div>`;
-  } else if (state.section === "am") {
-    h += `<div class="main">` + renderAMSection() + `</div>`;
-  } else if (state.section === "contacts") {
-    h += `<div class="main">` + renderContactsSection() + `</div>`;
   }
+  if (state.selectedDeal) h += renderModal(state.selectedDeal);
   app.innerHTML = h;
   wireHeaderEvents();
   wireEvents();
-  if (state.section === "dd") { wireDDEvents(); if(state.showUWCalc) wireUWCalcModal(); }
-  if (state.section === "am") wireAMEvents();
-  if (state.section === "contacts") wireContactsEvents();
+  if (state.view === "uwcalc") wireUWCalcEvents();
 }
 
 function renderLogin() {
   app.innerHTML = `<div class="login-container">
-    <h1>TaskFlow</h1>
+    <h1>CREFlow</h1>
     <p>Deal pipeline dashboard</p>
     <button class="login-btn" id="login-btn">Connect Google Account</button>
-    <span class="login-note">Read-only access to your TaskFlow spreadsheet</span>
+    <span class="login-note">Read-only access to your CREFlow spreadsheet</span>
   </div>`;
   document.getElementById("login-btn").addEventListener("click", doLogin);
 }
 
 function renderHeader() {
-  let subToggle = "";
-  if (state.section === "acquisitions") {
-    subToggle = `<div class="view-toggle" style="margin-left:12px">
-      <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
-      <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
-    </div>`;
-  }
   return `<div class="header"><div class="header-inner">
     <div class="header-left">
-      <h1>TaskFlow</h1>
+      <h1>CREFlow</h1>
       <div class="view-toggle">
-        <button class="view-btn ${state.section==='acquisitions'?'active':''}" data-section="acquisitions">Acquisitions</button>
-        <button class="view-btn ${state.section==='dd'?'active':''}" data-section="dd">DD</button>
-        <button class="view-btn ${state.section==='am'?'active':''}" data-section="am">AM</button>
-        <button class="view-btn ${state.section==='contacts'?'active':''}" data-section="contacts">Contacts</button>
+        <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
+        <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
+        <button class="view-btn ${state.view==='uwcalc'?'active':''}" data-view="uwcalc">UW Calc</button>
       </div>
-      ${subToggle}
     </div>
     <div class="header-right">
-      <input type="text" class="search-input" id="search-input" placeholder="Search..." value="${esc(state.search)}">
+      <input type="text" class="search-input" id="search-input" placeholder="Search deals..." value="${esc(state.search)}">
       <button class="login-btn" style="padding:8px 16px;font-size:12px" id="refresh-btn">↻ Refresh</button>
     </div>
   </div></div>`;
 }
 
 function wireHeaderEvents() {
-  document.querySelectorAll("[data-section]").forEach(btn => {
-    btn.addEventListener("click", () => { state.section = btn.dataset.section; state.search = ""; render(); });
-  });
   document.querySelectorAll("[data-view]").forEach(btn => {
     btn.addEventListener("click", () => { state.view = btn.dataset.view; render(); });
   });
   const searchEl = document.getElementById("search-input");
   if (searchEl) {
     searchEl.addEventListener("input", (e) => { state.search = e.target.value; render(); searchEl.focus(); });
+    // Restore cursor position
     if (document.activeElement === searchEl) searchEl.setSelectionRange(searchEl.value.length, searchEl.value.length);
   }
   const refreshBtn = document.getElementById("refresh-btn");
@@ -1066,636 +1182,7 @@ function wireEvents() {
   if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
 }
 
-// ---- CONTACTS SECTION ----
-function getContacts() {
-  const contacts = [];
-  // Pull broker contacts from deals
-  state.deals.forEach(d => {
-    if (!d.broker && !d.brokerContact && !d.brokerPhone && !d.brokerEmail) return;
-    const name = d.brokerContact || d.broker || "";
-    if (!name) return;
-    // Check if contact already exists (same phone or email)
-    const existing = contacts.find(c => 
-      (c.phone && d.brokerPhone && c.phone === d.brokerPhone) ||
-      (c.email && d.brokerEmail && c.email === d.brokerEmail) ||
-      (c.name === name && c.company === d.broker)
-    );
-    if (existing) {
-      if (!existing.deals.find(dl => dl.id === d.id)) {
-        existing.deals.push({ id: d.id, name: d.name, stage: d.stage });
-      }
-    } else {
-      contacts.push({
-        id: "c-" + d.id,
-        type: "broker",
-        name: name,
-        company: d.broker || "",
-        phone: d.brokerPhone || "",
-        email: d.brokerEmail || "",
-        deals: [{ id: d.id, name: d.name, stage: d.stage }]
-      });
-    }
-  });
-  return contacts;
-}
-
-function renderContactsSection() {
-  let contacts = getContacts();
-  
-  // Search filter
-  if (state.search) {
-    const q = state.search.toLowerCase();
-    contacts = contacts.filter(c => 
-      (c.name||"").toLowerCase().includes(q) || 
-      (c.company||"").toLowerCase().includes(q) || 
-      (c.phone||"").includes(q) || 
-      (c.email||"").toLowerCase().includes(q) ||
-      c.deals.some(d => (d.name||"").toLowerCase().includes(q))
-    );
-  }
-
-  let h = `<div style="margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">`;
-  h += `<div><span style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:800;color:var(--text)">Contacts</span>`;
-  h += `<span style="font-size:12px;color:var(--text-muted);margin-left:12px">${contacts.length} broker${contacts.length!==1?'s':''}</span></div>`;
-  h += `</div>`;
-
-  if (!contacts.length) {
-    h += `<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">${state.search?"No matching contacts":"No contacts yet"}</p><p style="font-size:13px;margin-top:4px">Broker contacts appear here from your deals</p></div>`;
-    return h;
-  }
-
-  // Contact cards grid
-  h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">`;
-  contacts.forEach(c => {
-    const isExpanded = state.selectedContact === c.id;
-    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer;transition:all 0.12s${isExpanded?';box-shadow:0 4px 16px rgba(0,0,0,0.08)':''}" data-contact-id="${c.id}">`;
-    h += `<div style="padding:16px">`;
-    
-    // Name + company
-    h += `<div style="display:flex;justify-content:space-between;align-items:flex-start">`;
-    h += `<div><div style="font-size:15px;font-weight:700;color:var(--text)">${esc(c.name)}</div>`;
-    if (c.company && c.company !== c.name) h += `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(c.company)}</div>`;
-    h += `</div>`;
-    h += `<span style="font-size:9px;padding:3px 8px;border-radius:4px;background:#6366F115;color:#6366F1;font-weight:600;text-transform:uppercase">Broker</span>`;
-    h += `</div>`;
-
-    // Phone + email
-    h += `<div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">`;
-    if (c.phone) {
-      h += `<a href="tel:${esc(c.phone)}" style="font-size:12px;color:#3B82F6;text-decoration:none;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">📞 ${esc(c.phone)}</a>`;
-    }
-    if (c.email) {
-      const gmailUrl = "https://mail.google.com/mail/?view=cm&to=" + encodeURIComponent(c.email);
-      h += `<a href="${gmailUrl}" target="_blank" style="font-size:12px;color:#3B82F6;text-decoration:none;display:flex;align-items:center;gap:4px" onclick="event.stopPropagation()">✉ ${esc(c.email)}</a>`;
-    }
-    h += `</div>`;
-
-    // Deal count badge
-    h += `<div style="margin-top:10px"><span style="font-size:10px;padding:2px 8px;border-radius:4px;background:var(--bg);color:var(--text-muted);font-weight:600">${c.deals.length} deal${c.deals.length!==1?'s':''}</span></div>`;
-
-    // Expanded — show linked deals
-    if (isExpanded) {
-      h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
-      h += `<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Linked Deals</div>`;
-      c.deals.forEach(d => {
-        const s = stg(d.stage);
-        h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-light)">`;
-        h += `<span style="font-size:12px;font-weight:500;color:var(--text)">${esc(d.name)}</span>`;
-        h += `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:${s.color}15;color:${s.color};font-weight:600">${s.label}</span>`;
-        h += `</div>`;
-      });
-      h += `</div>`;
-    }
-
-    h += `</div></div>`;
-  });
-  h += `</div>`;
-  return h;
-}
-
-function wireContactsEvents() {
-  document.querySelectorAll("[data-contact-id]").forEach(card => {
-    card.addEventListener("click", (e) => {
-      if (e.target.tagName === "A") return;
-      state.selectedContact = state.selectedContact === card.dataset.contactId ? null : card.dataset.contactId;
-      render();
-    });
-  });
-}
-
-// ---- DD SECTION ----
-function renderDDSection() {
-  // If a DD deal is selected, show detail page
-  if (state.ddDetailId) {
-    const dd = state.ddDeals.find(d => d.id === state.ddDetailId);
-    if (dd) return renderDDDetail(dd);
-  }
-
-  // Card list view
-  let ddList = state.ddDeals.filter(dd => (dd.stage||"negotiation_psa") !== "closed");
-  if (state.search) {
-    const q = state.search.toLowerCase();
-    ddList = ddList.filter(dd => (dd.dealName||"").toLowerCase().includes(q) || (dd.address||"").toLowerCase().includes(q));
-  }
-  if (state.ddFilter !== "all") ddList = ddList.filter(dd => (dd.stage||"negotiation_psa") === state.ddFilter);
-
-  let h = `<div style="margin-bottom:20px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">`;
-  h += `<button class="view-btn ${state.ddFilter==='all'?'active':''}" data-dd-filter="all">All</button>`;
-  DD_STAGES.filter(s=>s.id!=="closed").forEach(s => {
-    h += `<button class="view-btn ${state.ddFilter===s.id?'active':''}" data-dd-filter="${s.id}" style="${state.ddFilter===s.id?`background:${s.color}15;color:${s.color};border-color:${s.color}`:''}">${s.label}</button>`;
-  });
-  h += `</div>`;
-
-  if (!ddList.length) {
-    h += `<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">No active DD checklists</p><p style="font-size:13px;margin-top:4px">Deals move here when LOI is accepted</p></div>`;
-    return h;
-  }
-
-  h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">`;
-  ddList.forEach(dd => {
-    const allTasks = dd.tasks || [];
-    const done = allTasks.filter(t => t.completed).length;
-    const tot = allTasks.length;
-    const pct = tot ? Math.round(done/tot*100) : 0;
-    const tenants = dd.tenants || [];
-    const dtc = dd.closingDate ? Math.ceil((new Date(dd.closingDate+"T00:00:00") - new Date()) / 864e5) : null;
-    const ddStg = DD_STAGES.find(s => s.id === (dd.stage||"negotiation_psa")) || DD_STAGES[0];
-
-    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;border-left:4px solid ${ddStg.color};cursor:pointer;transition:all 0.12s" data-dd-detail="${dd.id}">`;
-    h += `<div style="padding:16px">`;
-    h += `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><div><div style="font-size:14px;font-weight:700;color:var(--text)">${esc(dd.dealName)}</div>`;
-    if(dd.address)h+=`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(dd.address)}</div>`;
-    h += `</div><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div>`;
-    h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="flex:1;height:6px;background:var(--border-light);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct===100?'#10B981':'#3B82F6'};border-radius:3px"></div></div><span style="font-size:11px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${pct}%</span></div>`;
-    h += `<div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted)"><span>${done}/${tot} tasks</span>`;
-    if(tenants.length)h+=`<span>${tenants.length} tenants</span>`;
-    if(dtc!==null)h+=`<span style="color:${dtc<14?'#EF4444':'var(--text-muted)'}">${dtc>0?dtc+'d to close':'Past closing'}</span>`;
-    h += `</div></div></div>`;
-  });
-  h += `</div>`;
-  return h;
-}
-
-function renderDDDetail(dd) {
-  const allTasks = dd.tasks || [];
-  const tenants = dd.tenants || [];
-  const done = allTasks.filter(t=>t.completed).length;
-  const tot = allTasks.length;
-  const pct = tot ? Math.round(done/tot*100) : 0;
-  const ddStg = DD_STAGES.find(s=>s.id===(dd.stage||"negotiation_psa")) || DD_STAGES[0];
-
-  let h = `<div style="max-width:1100px;margin:0 auto">`;
-  // Back button + header
-  h += `<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px"><button data-action="dd-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'DM Sans',sans-serif">← Back</button>`;
-  h += `<div style="flex:1"><div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(dd.dealName)}</div>`;
-  if(dd.address)h+=`<div style="font-size:12px;color:var(--text-muted)">${esc(dd.address)}</div>`;
-  h += `</div><span style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:6px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div>`;
-
-  // Info bar
-  h += `<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">`;
-  if(dd.folderLink)h+=`<a href="${esc(dd.folderLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#3B82F6;text-decoration:none;font-weight:500">📁 Deal Folder</a>`;
-  if(dd.uwLink)h+=`<a href="${esc(dd.uwLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#D97706;text-decoration:none;font-weight:500">📊 Underwriting</a>`;
-  // Stage selector
-  DD_STAGES.forEach(s=>{
-    h+=`<button data-action="dd-set-stage" data-value="${s.id}" style="padding:6px 12px;border:1px solid ${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--border)'};border-radius:8px;font-size:11px;cursor:pointer;background:${(dd.stage||"negotiation_psa")===s.id?s.color+'15':'var(--bg-card)'};color:${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${s.label}</button>`;
-  });
-  h += `<button data-action="dd-move-to-acq" style="padding:6px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'DM Sans',sans-serif;margin-left:auto">↩ Move to Acquisitions</button>`;
-  h += `</div>`;
-
-  // TENANT TIMELINE
-  if(tenants.length){
-    h += renderTenantTimeline(tenants, dd);
-  } else {
-    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px;text-align:center;margin-bottom:20px">`;
-    h += `<div style="font-size:14px;color:var(--text-muted);margin-bottom:8px">No tenants loaded</div>`;
-    if(dd.uwLink)h+=`<div style="font-size:12px;color:var(--text-muted)">Click "Sync from UW" in the panel to load tenant data</div>`;
-    else h+=`<div style="font-size:12px;color:var(--text-muted)">Generate UW first, then sync tenants</div>`;
-    h += `</div>`;
-  }
-
-  // DD CHECKLIST
-  h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px">`;
-  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">DD Checklist</div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--text-muted)">${done}/${tot}</span><div style="width:80px;height:6px;background:var(--border-light);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct===100?'#10B981':'#3B82F6'};border-radius:3px"></div></div><span style="font-size:12px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${pct}%</span></div></div>`;
-  allTasks.forEach((t,i) => {
-    h += `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light)"><button data-action="dd-toggle-task" data-idx="${i}" style="background:none;border:none;cursor:pointer;font-size:16px;flex-shrink:0">${t.completed?'✅':'⬜'}</button><span style="flex:1;font-size:13px;color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span><button data-action="dd-del-task" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px">✕</button></div>`;
-  });
-  h += `<button data-action="dd-add-task" style="margin-top:10px;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;color:var(--text-muted);font-family:'DM Sans',sans-serif;width:100%;text-align:center">+ Add Task</button>`;
-  h += `</div>`;
-
-  h += `</div>`;
-  return h;
-}
-
-function renderTenantTimeline(tenants, dd) {
-  // Calculate year range
-  const currentYear = new Date().getFullYear();
-  let minYear = currentYear - 2;
-  let maxYear = currentYear + 5;
-  tenants.forEach(t => {
-    if(t.leaseStart){ const y = new Date(t.leaseStart).getFullYear(); if(y < minYear) minYear = y; }
-    if(t.leaseEnd && t.leaseEnd !== "MTM"){ const y = new Date(t.leaseEnd).getFullYear(); if(y+1 > maxYear) maxYear = y+1; }
-  });
-  const years = [];
-  for(let y = minYear; y <= maxYear; y++) years.push(y);
-  const totalYears = years.length;
-
-  let h = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px">`;
-  h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border)"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">Tenant Timeline</div>`;
-  h += `<div style="display:flex;gap:12px;font-size:10px;color:var(--text-muted)"><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#6366F1"></span>NNN</span><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#10B981"></span>Gross</span><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#EF4444"></span>Vacant</span></div></div>`;
-
-  h += `<div style="overflow-x:auto"><div style="min-width:${Math.max(800, totalYears*100)}px">`;
-  // Year headers
-  h += `<div style="display:flex;border-bottom:1px solid var(--border)"><div style="width:180px;flex-shrink:0;padding:8px 16px;font-size:10px;color:var(--text-muted);font-weight:600">TENANT</div>`;
-  years.forEach(y => {
-    const isCurrent = y === currentYear;
-    h += `<div style="flex:1;padding:8px 0;text-align:center;font-size:12px;font-weight:700;color:${isCurrent?'#3B82F6':'var(--text-muted)'};background:${isCurrent?'#3B82F608':''};border-left:1px solid var(--border-light);cursor:pointer" data-action="year-click" data-year="${y}">${y}</div>`;
-  });
-  h += `</div>`;
-
-  // Tenant rows
-  tenants.forEach(t => {
-    const typeColor = t.isVacant ? "#EF4444" : t.leaseType==="nnn" ? "#6366F1" : "#10B981";
-    h += `<div style="display:flex;border-bottom:1px solid var(--border-light);min-height:48px">`;
-    h += `<div style="width:180px;flex-shrink:0;padding:8px 16px;display:flex;flex-direction:column;justify-content:center"><div style="font-size:12px;font-weight:700;color:${t.isVacant?'#EF4444':'var(--text)'}">${esc(t.name)}</div><div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}</div></div>`;
-
-    // Timeline cells
-    h += `<div style="flex:1;display:flex;position:relative">`;
-    // Today line
-    const todayFrac = (new Date() - new Date(minYear,0,1)) / (new Date(maxYear+1,0,1) - new Date(minYear,0,1));
-    h += `<div style="position:absolute;left:${todayFrac*100}%;top:0;bottom:0;width:2px;background:#EF4444;z-index:5;opacity:0.6"></div>`;
-
-    // Year grid lines
-    years.forEach(() => { h += `<div style="flex:1;border-left:1px solid var(--border-light)"></div>`; });
-
-    // Lease bar overlay
-    if(!t.isVacant && t.leaseStart){
-      const startDate = new Date(t.leaseStart);
-      const endDate = t.leaseEnd === "MTM" ? new Date() : new Date(t.leaseEnd);
-      const rangeStart = new Date(minYear,0,1).getTime();
-      const rangeEnd = new Date(maxYear+1,0,1).getTime();
-      const rangeLen = rangeEnd - rangeStart;
-      const barLeft = Math.max(0, (startDate.getTime() - rangeStart) / rangeLen * 100);
-      const barRight = Math.min(100, (endDate.getTime() - rangeStart) / rangeLen * 100);
-      const barWidth = barRight - barLeft;
-      if(barWidth > 0){
-        h += `<div style="position:absolute;left:${barLeft}%;width:${barWidth}%;top:10px;height:24px;background:${typeColor}30;border:1px solid ${typeColor}60;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:9px;font-weight:600;color:${typeColor};overflow:hidden;white-space:nowrap;z-index:2">$${t.rentPerSf||0}/SF${t.leaseEnd==="MTM"?" (MTM)":""}</div>`;
-      }
-    } else if(t.isVacant){
-      h += `<div style="position:absolute;left:0%;width:100%;top:10px;height:24px;background:#EF444415;border:1px dashed #EF444440;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#EF4444;z-index:2">VACANT</div>`;
-    }
-
-    // Document indicators
-    const docs = t.documents || [];
-    if(docs.length){
-      h += `<div style="position:absolute;right:4px;bottom:2px;display:flex;gap:2px;z-index:3">`;
-      docs.forEach(d => {
-        h += `<span style="font-size:8px;padding:1px 3px;border-radius:2px;background:${d.link?'#3B82F620':'#EF444420'};color:${d.link?'#3B82F6':'#EF4444'}" title="${esc(d.type)}: ${d.link?'uploaded':'missing'}">${d.type.charAt(0).toUpperCase()}</span>`;
-      });
-      h += `</div>`;
-    }
-
-    h += `</div></div>`;
-  });
-
-  h += `</div></div></div>`;
-
-  // Tenant document cards
-  h += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-bottom:20px">`;
-  tenants.forEach((t,ti) => {
-    if(t.isVacant) return;
-    const docs = t.documents || [];
-    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px">`;
-    h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-size:13px;font-weight:700;color:var(--text)">${esc(t.name)}</div>`;
-    if(t.subfolderLink)h+=`<a href="${esc(t.subfolderLink)}" target="_blank" style="font-size:10px;color:#3B82F6;text-decoration:none">📁 Folder</a>`;
-    h += `</div>`;
-    h += `<div style="font-size:10px;color:var(--text-muted);margin-bottom:8px">${t.suite?'Suite '+t.suite+' · ':''}${t.leaseType?t.leaseType.toUpperCase():''} · $${t.rentPerSf||0}/SF</div>`;
-
-    // Documents list
-    if(docs.length){
-      docs.forEach((d,di) => {
-        h += `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border-light);font-size:11px">`;
-        h += `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:${d.link?'#10B98120':'#EF444420'};color:${d.link?'#10B981':'#EF4444'};font-weight:600">${d.link?'✓':'!'}</span>`;
-        h += `<span style="flex:1;color:var(--text)">${esc(d.type)}${d.name?' — '+esc(d.name):''}</span>`;
-        if(d.link)h+=`<a href="${esc(d.link)}" target="_blank" style="font-size:10px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">View ↗</a>`;
-        h += `</div>`;
-      });
-    }
-
-    // Add document
-    h += `<div style="margin-top:8px;display:flex;gap:6px"><select data-tenant-idx="${ti}" id="doc-type-${ti}" style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:10px;font-family:'DM Sans',sans-serif"><option value="Lease">Lease</option><option value="Amendment">Amendment</option><option value="Extension">Extension</option><option value="Addendum">Addendum</option><option value="Estoppel">Estoppel</option><option value="SNDA">SNDA</option><option value="Abstract">Abstract</option><option value="Other">Other</option></select>`;
-    h += `<button data-action="dd-add-doc-link" data-tenant-idx="${ti}" style="padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:10px;color:var(--text-muted);font-family:'DM Sans',sans-serif">+ Link</button>`;
-    h += `<button data-action="dd-upload-doc" data-tenant-idx="${ti}" style="padding:5px 8px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;cursor:pointer;font-size:10px;color:#3B82F6;font-family:'DM Sans',sans-serif">↑ Upload</button></div>`;
-    // Hidden file input
-    h += `<input type="file" id="file-upload-${ti}" data-tenant-idx="${ti}" style="display:none" accept=".pdf,.doc,.docx,.jpg,.png">`;
-
-    h += `</div>`;
-  });
-  h += `</div>`;
-
-  return h;
-}
-
-// Year click — show rent totals
-function showYearRentTotal(year, tenants) {
-  let total = 0;
-  let breakdown = [];
-  tenants.forEach(t => {
-    if(t.isVacant){ breakdown.push(t.name + ": VACANT"); return; }
-    const start = t.leaseStart ? new Date(t.leaseStart).getFullYear() : 9999;
-    const end = t.leaseEnd === "MTM" ? 9999 : (t.leaseEnd ? new Date(t.leaseEnd).getFullYear() : 0);
-    if(year >= start && year <= end){
-      const rent = (t.rentPerSf||0) * (t.sqft||0);
-      total += rent;
-      breakdown.push(t.name + ": $" + Math.round(t.rentPerSf||0) + "/SF × " + fmtNum(t.sqft||0) + " = " + fmt$(rent));
-    } else {
-      breakdown.push(t.name + ": expired/not started");
-    }
-  });
-  alert(year + " Annual Rent: " + fmt$(total) + "\n\n" + breakdown.join("\n"));
-}
-
-function wireDDEvents() {
-  // Card list click → detail page
-  document.querySelectorAll("[data-dd-detail]").forEach(card => {
-    card.addEventListener("click", () => { state.ddDetailId = card.dataset.ddDetail; render(); });
-  });
-  // Filter buttons
-  document.querySelectorAll("[data-dd-filter]").forEach(btn => {
-    btn.addEventListener("click", () => { state.ddFilter = btn.dataset.ddFilter; render(); });
-  });
-  // Back button
-  const backBtn = document.querySelector("[data-action='dd-back']");
-  if(backBtn) backBtn.addEventListener("click", () => { state.ddDetailId = null; render(); });
-
-  // Stage change
-  document.querySelectorAll("[data-action='dd-set-stage']").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-      if(dd){ dd.stage = btn.dataset.value; saveDDToSheet(dd); render(); }
-    });
-  });
-
-  // Move to Acquisitions
-  const moveBtn = document.querySelector("[data-action='dd-move-to-acq']");
-  if(moveBtn) moveBtn.addEventListener("click", () => {
-    if(!confirm("Move this deal back to Acquisitions?")) return;
-    const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-    if(dd){
-      // Find original deal and update stage back to underwriting
-      const deal = state.deals.find(d=>d.id===dd.dealId);
-      if(deal){ deal.stage = "underwriting"; saveDealsToSheet(); }
-      // Archive DD (set stage to archived)
-      dd.stage = "archived";
-      saveDDToSheet(dd);
-      state.ddDetailId = null;
-      render();
-    }
-  });
-
-  // Task toggle
-  document.querySelectorAll("[data-action='dd-toggle-task']").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-      if(dd){ const idx = parseInt(btn.dataset.idx); dd.tasks[idx].completed = !dd.tasks[idx].completed; saveDDToSheet(dd); render(); }
-    });
-  });
-  // Task delete
-  document.querySelectorAll("[data-action='dd-del-task']").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-      if(dd){ dd.tasks.splice(parseInt(btn.dataset.idx),1); saveDDToSheet(dd); render(); }
-    });
-  });
-  // Task add
-  const addTaskBtn = document.querySelector("[data-action='dd-add-task']");
-  if(addTaskBtn) addTaskBtn.addEventListener("click", () => {
-    const text = prompt("New DD task:");
-    if(!text?.trim()) return;
-    const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-    if(dd){ dd.tasks.push({id:Math.random().toString(36).slice(2,10),text:text.trim(),completed:false,dueDate:"",notes:""}); saveDDToSheet(dd); render(); }
-  });
-
-  // Year click for rent totals
-  document.querySelectorAll("[data-action='year-click']").forEach(el => {
-    el.addEventListener("click", () => {
-      const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-      if(dd) showYearRentTotal(parseInt(el.dataset.year), dd.tenants||[]);
-    });
-  });
-
-  // Add document link
-  document.querySelectorAll("[data-action='dd-add-doc-link']").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const ti = parseInt(btn.dataset.tenantIdx);
-      const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-      if(!dd) return;
-      const typeEl = document.getElementById("doc-type-"+ti);
-      const docType = typeEl ? typeEl.value : "Lease";
-      const link = prompt("Paste document link:");
-      if(!link?.trim()) return;
-      const name = prompt("Document name (optional):") || "";
-      if(!dd.tenants[ti].documents) dd.tenants[ti].documents = [];
-      dd.tenants[ti].documents.push({type:docType, name:name.trim(), link:link.trim(), date:new Date().toISOString().split("T")[0]});
-      saveDDToSheet(dd);
-      render();
-    });
-  });
-
-  // Upload document
-  document.querySelectorAll("[data-action='dd-upload-doc']").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const ti = parseInt(btn.dataset.tenantIdx);
-      document.getElementById("file-upload-"+ti).click();
-    });
-  });
-  document.querySelectorAll("input[type='file'][data-tenant-idx]").forEach(input => {
-    input.addEventListener("change", async (e) => {
-      const ti = parseInt(input.dataset.tenantIdx);
-      const dd = state.ddDeals.find(d=>d.id===state.ddDetailId);
-      if(!dd || !e.target.files.length) return;
-      const file = e.target.files[0];
-      const typeEl = document.getElementById("doc-type-"+ti);
-      const docType = typeEl ? typeEl.value : "Lease";
-      const tenant = dd.tenants[ti];
-
-      // Upload to tenant subfolder in Drive
-      let folderId = "";
-      if(tenant.subfolderLink){ const m = tenant.subfolderLink.match(/folders\/([a-zA-Z0-9_-]+)/); if(m) folderId = m[1]; }
-      if(!folderId && dd.folderLink){ const m = dd.folderLink.match(/folders\/([a-zA-Z0-9_-]+)/); if(m) folderId = m[1]; }
-
-      if(!folderId){ alert("No folder found for upload. Sync tenants from UW first."); return; }
-
-      try {
-        btn.textContent = "Uploading...";
-        // Create file metadata
-        const metadata = { name: file.name, parents: [folderId] };
-        const form = new FormData();
-        form.append("metadata", new Blob([JSON.stringify(metadata)], {type:"application/json"}));
-        form.append("file", file);
-
-        const resp = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
-          method: "POST",
-          headers: { "Authorization": "Bearer " + state.accessToken },
-          body: form
-        });
-        const result = await resp.json();
-        if(result.id){
-          const link = "https://drive.google.com/file/d/" + result.id + "/view";
-          if(!tenant.documents) tenant.documents = [];
-          tenant.documents.push({type:docType, name:file.name, link:link, date:new Date().toISOString().split("T")[0]});
-          saveDDToSheet(dd);
-          render();
-        } else { alert("Upload failed"); render(); }
-      } catch(err){ alert("Upload error: " + err.message); render(); }
-    });
-  });
-
-  // UW Calc button
-  const uwBtn = document.querySelector("[data-action='open-uwcalc']");
-  if(uwBtn) uwBtn.addEventListener("click", () => { state.showUWCalc = !state.showUWCalc; render(); });
-}
-
-// ---- AM SECTION ----
-function renderAMSection() {
-  let propList = state.properties;
-  if (state.search) {
-    const q = state.search.toLowerCase();
-    propList = propList.filter(p => (p.name||"").toLowerCase().includes(q) || (p.address||"").toLowerCase().includes(q) || (p.tenant||"").toLowerCase().includes(q));
-  }
-
-  if (!propList.length) {
-    return `<div style="text-align:center;padding:60px 0;color:var(--text-muted)"><p style="font-size:16px;font-weight:600">No properties yet</p><p style="font-size:13px;margin-top:4px">Properties appear here when deals close</p></div>`;
-  }
-
-  let h = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">`;
-  propList.forEach(p => {
-    const allTasks = p.tasks || [];
-    const activeTasks = allTasks.filter(t => !t.completed);
-    const overdueTasks = activeTasks.filter(t => t.dueDate && new Date(t.dueDate+"T00:00:00") < new Date());
-    const isExpanded = state.selectedProp === p.id;
-
-    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer" data-prop-id="${p.id}">`;
-    h += `<div style="padding:16px">`;
-    h += `<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.name)}</div>`;
-    if(p.address)h+=`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(p.address)}</div>`;
-    
-    // Stats
-    h += `<div style="display:flex;gap:16px;margin-top:10px;font-size:12px">`;
-    if(p.noi)h+=`<div><span style="color:var(--text-muted)">NOI</span> <span style="font-weight:700;color:var(--text)">${fmt$(p.noi)}</span></div>`;
-    if(p.tenant)h+=`<div><span style="color:var(--text-muted)">Tenant</span> <span style="font-weight:700;color:var(--text)">${esc(p.tenant)}</span></div>`;
-    h += `</div>`;
-    
-    // Task badges
-    if(activeTasks.length || overdueTasks.length){
-      h += `<div style="display:flex;gap:6px;margin-top:8px">`;
-      if(activeTasks.length)h+=`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#EFF6FF;color:#3B82F6;font-weight:600">${activeTasks.length} task${activeTasks.length>1?'s':''}</span>`;
-      if(overdueTasks.length)h+=`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#FEF2F2;color:#EF4444;font-weight:600">${overdueTasks.length} overdue</span>`;
-      h += `</div>`;
-    }
-
-    // Expanded task list
-    if(isExpanded && allTasks.length){
-      h += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;
-      allTasks.forEach(t => {
-        const pr = PRIORITIES[t.priority] || PRIORITIES.medium;
-        const isOverdue = !t.completed && t.dueDate && new Date(t.dueDate+"T00:00:00") < new Date();
-        h += `<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'};flex-shrink:0">${t.completed?'✓':'○'}</span><div style="flex:1"><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span>`;
-        if(t.dueDate)h+=`<span style="font-size:10px;color:${isOverdue?'#EF4444':'var(--text-muted)'};margin-left:8px">${t.dueDate}</span>`;
-        h += `</div><span style="font-size:9px;color:${pr.color};font-weight:600">${pr.label}</span></div>`;
-      });
-      h += `</div>`;
-    }
-
-    h += `</div></div>`;
-  });
-  h += `</div>`;
-  return h;
-}
-
-function wireAMEvents() {
-  document.querySelectorAll("[data-prop-id]").forEach(card => {
-    card.addEventListener("click", () => {
-      state.selectedProp = state.selectedProp === card.dataset.propId ? null : card.dataset.propId;
-      render();
-    });
-  });
-}
-
-// ---- UW CALC MODAL (for DD section) ----
-function renderUWCalcModal() {
-  const u = state.uwCalc || { price:"", sqft:"", rentPsf:"", vacancy:"8", expenseRatio:"35", targetCap:"7.5" };
-  state.uwCalc = u;
-  const price = parseFloat(u.price)||0;
-  const sf = parseFloat(u.sqft)||0;
-  const rent = parseFloat(u.rentPsf)||0;
-  const vac = parseFloat(u.vacancy)||0;
-  const exp = parseFloat(u.expenseRatio)||0;
-  const cap = parseFloat(u.targetCap)||0;
-  const canCalc = sf && rent && cap;
-  const gpr = sf * rent;
-  const egi = gpr * (1 - vac/100);
-  const noi = egi * (1 - exp/100);
-  const impliedValue = cap > 0 ? noi / (cap/100) : 0;
-  const valuePsf = sf > 0 ? impliedValue / sf : 0;
-  const spread = price > 0 ? impliedValue - price : 0;
-  const spreadPct = price > 0 ? ((impliedValue/price)-1)*100 : 0;
-  const impliedCap = price > 0 ? (noi/price)*100 : 0;
-
-  let h = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center" id="uwcalc-overlay">`;
-  h += `<div style="background:white;border-radius:16px;max-width:580px;width:90%;padding:24px;max-height:90vh;overflow-y:auto" onclick="event.stopPropagation()">`;
-  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h2 style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:800">Quick UW Calculator</h2><button id="close-uwcalc" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted)">✕</button></div>`;
-  
-  h += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">`;
-  [["Asking Price","uw-d-price",u.price,"4850000"],["Building SF","uw-d-sqft",u.sqft,"14820"],
-   ["Rent / SF","uw-d-rent",u.rentPsf,"18.00"],["Vacancy %","uw-d-vac",u.vacancy,"8"],
-   ["Expense Ratio %","uw-d-exp",u.expenseRatio,"35"],["Target Cap %","uw-d-cap",u.targetCap,"7.5"]
-  ].forEach(([label,id,val,ph]) => {
-    h += `<div><label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">${label}</label><input type="number" id="${id}" value="${val}" placeholder="${ph}" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:'DM Sans',sans-serif;box-sizing:border-box"></div>`;
-  });
-  h += `</div>`;
-
-  if (canCalc) {
-    const spreadColor = spread >= 0 ? "#10B981" : "#EF4444";
-    const spreadSign = spread >= 0 ? "+" : "";
-    h += `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;text-align:center">`;
-    [["GPR",fmt$(Math.round(gpr))],["EGI",fmt$(Math.round(egi))],["NOI",fmt$(Math.round(noi))],
-     ["Implied Value",fmt$(Math.round(impliedValue))],["Value/SF","$"+Math.round(valuePsf)],["Implied Cap",impliedCap.toFixed(2)+"%"]
-    ].forEach(([l,v]) => {
-      h += `<div style="background:var(--bg);border-radius:8px;padding:10px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">${l}</div><div style="font-size:16px;font-weight:800;color:var(--text);margin-top:3px">${v}</div></div>`;
-    });
-    h += `</div>`;
-    if (price > 0) {
-      h += `<div style="margin-top:12px;text-align:center;background:${spread>=0?'#F0FDF4':'#FEF2F2'};border-radius:8px;padding:12px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Spread vs Asking</div><div style="font-size:20px;font-weight:800;margin-top:3px;color:${spreadColor}">${spreadSign}${fmt$(Math.round(spread))} (${spreadSign}${spreadPct.toFixed(1)}%)</div></div>`;
-    }
-    h += `</div>`;
-  } else {
-    h += `<div style="margin-top:16px;text-align:center;color:var(--text-muted);font-size:12px;padding:16px 0">Enter Rent/SF, Building SF, and Target Cap to see results</div>`;
-  }
-
-  h += `</div></div>`;
-  return h;
-}
-
-function wireUWCalcModal() {
-  const overlay = document.getElementById("uwcalc-overlay");
-  if(overlay) overlay.addEventListener("click", (e) => { if(e.target===overlay){state.showUWCalc=false;render();} });
-  const closeBtn = document.getElementById("close-uwcalc");
-  if(closeBtn) closeBtn.addEventListener("click", () => { state.showUWCalc=false; render(); });
-  ["uw-d-price","uw-d-sqft","uw-d-rent","uw-d-vac","uw-d-exp","uw-d-cap"].forEach(id => {
-    const el = document.getElementById(id);
-    if(el) el.addEventListener("input", () => {
-      const map = {"uw-d-price":"price","uw-d-sqft":"sqft","uw-d-rent":"rentPsf","uw-d-vac":"vacancy","uw-d-exp":"expenseRatio","uw-d-cap":"targetCap"};
-      if(!state.uwCalc) state.uwCalc = {price:"",sqft:"",rentPsf:"",vacancy:"8",expenseRatio:"35",targetCap:"7.5"};
-      state.uwCalc[map[id]] = el.value;
-      const activeId = document.activeElement?.id;
-      const cursorPos = document.activeElement?.selectionStart;
-      render();
-      if(activeId){const refocus=document.getElementById(activeId);if(refocus){refocus.focus();if(cursorPos!==undefined)refocus.setSelectionRange(cursorPos,cursorPos);}}
-    });
-  });
-}
-
-// ---- QUICK UW CALCULATOR (standalone - kept for backwards compat) ----
+// ---- QUICK UW CALCULATOR ----
 function renderUWCalc() {
   const u = state.uwCalc || { price:"", sqft:"", rentPsf:"", vacancy:"8", expenseRatio:"35", targetCap:"7.5" };
   state.uwCalc = u;
