@@ -793,7 +793,6 @@ function renderAcqKPIs() {
   h += `</div>`; // close health row
 
   h += `</div>`; // close outer wrapper
-  h += renderKPITracker();
   return h;
 }
 
@@ -931,6 +930,7 @@ function render() {
 
   let h = renderHeader();
   if (state.section === "acquisitions") {
+    h += renderKPITracker();
     h += renderStats();
     h += renderAcqKPIs();
     h += `<div class="main">`;
@@ -1394,16 +1394,20 @@ function renderKPITracker() {
   const loiCounter = state.deals.filter(d => d.stage==="underwriting" && d.stageChangedDate && filterFn(d.stageChangedDate) && d.loiLink).length;
   const pctCountered = loiSent > 0 ? Math.round(loiCounter/loiSent*100) : 0;
 
+  // Scale goals by period
+  const goalMult = state.kpiPeriod === "month" ? 4 : state.kpiPeriod === "quarter" ? 13 : state.kpiPeriod === "year" ? 52 : 1;
+  const g = (key) => Math.round(KPI_GOALS[key] * goalMult);
+
   const kpis = [
-    { label:"Finding Properties", actual:findingProps, goal:KPI_GOALS.findingProperties },
-    { label:"Property UW", actual:propUW, goal:KPI_GOALS.propertyUW },
-    { label:"LOI Created", actual:loiCreated, goal:KPI_GOALS.loiCreated },
-    { label:"LOI Sent", actual:loiSent, goal:KPI_GOALS.loiSent },
+    { label:"Finding Properties", actual:findingProps, goal:g("findingProperties") },
+    { label:"Property UW", actual:propUW, goal:g("propertyUW") },
+    { label:"LOI Created", actual:loiCreated, goal:g("loiCreated") },
+    { label:"LOI Sent", actual:loiSent, goal:g("loiSent") },
     { label:"LOI Counter", actual:loiCounter, goal:null },
     { label:"% Countered", actual:pctCountered+"%", goal:"80%+" },
-    { label:"New Broker Calls", actual:newBrokerCalls, goal:KPI_GOALS.callNewBrokers },
-    { label:"Broker Follow Up", actual:followUpCalls, goal:KPI_GOALS.brokerFollowUp },
-    { label:"Deals Closed", actual:dealsClosed, goal:KPI_GOALS.dealsClosed },
+    { label:"New Broker Calls", actual:newBrokerCalls, goal:g("callNewBrokers") },
+    { label:"Broker Follow Up", actual:followUpCalls, goal:g("brokerFollowUp") },
+    { label:"Deals Closed", actual:dealsClosed, goal:g("dealsClosed") },
   ];
 
   // Grade
@@ -1411,8 +1415,9 @@ function renderKPITracker() {
   const grade = graded.length ? Math.round(graded.reduce((s,k) => s + Math.min(k.actual/k.goal, 1), 0) / graded.length * 100) : 0;
   const gradeColor = grade >= 80 ? "#10B981" : grade >= 50 ? "#E8A838" : "#EF4444";
 
+  const periodLabel = state.kpiPeriod === "week" ? "Weekly" : state.kpiPeriod === "month" ? "Monthly" : state.kpiPeriod === "quarter" ? "Quarterly" : "Yearly";
   let h = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin:0 32px 16px">`;
-  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="display:flex;align-items:center;gap:12px"><span class="stat-label">Weekly Scorecard</span><span style="font-size:11px;color:var(--text-muted)">${label}</span></div>`;
+  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="display:flex;align-items:center;gap:12px"><span class="stat-label">${periodLabel} Scorecard</span><span style="font-size:11px;color:var(--text-muted)">${label}</span></div>`;
   h += `<div style="display:flex;align-items:center;gap:8px"><div style="display:flex;gap:2px">`;
   ["week","month","quarter","year"].forEach(p => {
     h += `<button data-kpi-period="${p}" style="padding:4px 10px;border:1px solid ${state.kpiPeriod===p?'#3B82F6':'var(--border)'};border-radius:6px;font-size:10px;cursor:pointer;background:${state.kpiPeriod===p?'#3B82F620':'transparent'};color:${state.kpiPeriod===p?'#3B82F6':'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${p.charAt(0).toUpperCase()+p.slice(1)}</button>`;
