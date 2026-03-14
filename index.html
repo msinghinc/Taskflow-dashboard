@@ -756,10 +756,8 @@ function renderAcqKPIs() {
     h += `<div style="max-height:120px;overflow-y:auto">`;
     flaggedDeals.slice(0, 8).forEach(d => {
       const flags = getDealFlagsDash(d);
-      h += `<div style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:11px">
-        <span style="font-weight:600;color:var(--text)">${esc(d.name)}</span>
-        <span style="color:var(--text-muted)"> — ${flags.map(f => f.msg).join(", ")}</span>
-      </div>`;
+      const link = d.listingLink || d.costarLink || d.uwLink || "";
+      h += `<div style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:11px;${link?'cursor:pointer':''}"><a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="text-decoration:none"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:var(--text-muted)"> — ${flags.map(f => f.msg).join(", ")}</span></a></div>`;
     });
     if (flaggedDeals.length > 8) h += `<div style="font-size:10px;color:var(--text-muted);padding:4px 0">+${flaggedDeals.length - 8} more</div>`;
     h += `</div>`;
@@ -780,10 +778,11 @@ function renderAcqKPIs() {
     staleDeals.forEach(d => {
       const la = d.lastActivity || d.createdAt || 0;
       const days = Math.floor((now - la) / DAY);
-      h += `<div style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:11px;display:flex;justify-content:space-between">
+      const link = d.listingLink || d.costarLink || d.uwLink || "";
+      h += `<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:11px;display:flex;justify-content:space-between;text-decoration:none;${link?'cursor:pointer':''}">
         <span style="font-weight:600;color:var(--text)">${esc(d.name)}</span>
         <span style="color:#D97706;font-weight:600;font-size:10px">${days}d idle</span>
-      </div>`;
+      </a>`;
     });
     h += `</div>`;
   } else {
@@ -1400,7 +1399,7 @@ function renderKPITracker() {
   // Calculate KPIs
   const findingProps = state.deals.filter(d => d.createdAt && filterFn(d.createdAt)).length;
   const propUW = state.deals.filter(d => d.uwGeneratedDate && filterFn(d.uwGeneratedDate)).length;
-  const loiCreated = state.deals.filter(d => d.loiGeneratedDate && filterFn(d.loiGeneratedDate)).length;
+  const loiCreated = state.deals.filter(d => (d.loiGeneratedDate && filterFn(d.loiGeneratedDate)) || (d.loiSentDate && filterDate(d.loiSentDate) && !d.loiGeneratedDate)).length;
   const loiSent = state.deals.filter(d => d.loiSentDate && filterDate(d.loiSentDate)).length;
   let newBrokerCalls = 0, followUpCalls = 0;
   state.deals.forEach(d => {
@@ -1493,6 +1492,56 @@ function renderContactsSection() {
 }
 function wireContactsEvents(){document.querySelectorAll("[data-contact-id]").forEach(card=>{card.addEventListener("click",(e)=>{if(e.target.tagName==="A")return;state.selectedContact=state.selectedContact===card.dataset.contactId?null:card.dataset.contactId;render();});});}
 
+// ---- TENANT TIMELINE ----
+function renderTenantTimeline(tenants) {
+  const currentYear = new Date().getFullYear();
+  let minYear = currentYear - 2, maxYear = currentYear + 5;
+  tenants.forEach(t => {
+    if(t.leaseStart){ const y=new Date(t.leaseStart).getFullYear(); if(y<minYear)minYear=y; }
+    if(t.leaseEnd&&t.leaseEnd!=="MTM"){ const y=new Date(t.leaseEnd).getFullYear(); if(y+1>maxYear)maxYear=y+1; }
+  });
+  const years=[]; for(let y=minYear;y<=maxYear;y++)years.push(y);
+
+  let h=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px">`;
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border)"><div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Lease Timeline</div>`;
+  h+=`<div style="display:flex;gap:12px;font-size:10px;color:var(--text-muted)"><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#6366F1"></span>NNN</span><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#10B981"></span>Gross</span><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#EF4444"></span>Vacant</span></div></div>`;
+
+  h+=`<div style="overflow-x:auto"><div style="min-width:${Math.max(800,years.length*100)}px">`;
+  // Year headers
+  h+=`<div style="display:flex;border-bottom:1px solid var(--border)"><div style="width:180px;flex-shrink:0;padding:8px 16px;font-size:10px;color:var(--text-muted);font-weight:600">TENANT</div>`;
+  years.forEach(y=>{h+=`<div style="flex:1;padding:8px 0;text-align:center;font-size:12px;font-weight:700;color:${y===currentYear?'#3B82F6':'var(--text-muted)'};background:${y===currentYear?'#3B82F608':''};border-left:1px solid var(--border-light);cursor:pointer" data-action="year-click" data-year="${y}">${y}</div>`;});
+  h+=`</div>`;
+
+  // Tenant rows
+  const rangeStart=new Date(minYear,0,1).getTime(), rangeEnd=new Date(maxYear+1,0,1).getTime(), rangeLen=rangeEnd-rangeStart;
+  const todayFrac=(Date.now()-rangeStart)/rangeLen;
+
+  tenants.forEach(t=>{
+    const typeColor=t.isVacant?"#EF4444":t.leaseType==="nnn"?"#6366F1":"#10B981";
+    h+=`<div style="display:flex;border-bottom:1px solid var(--border-light);min-height:48px">`;
+    h+=`<div style="width:180px;flex-shrink:0;padding:8px 16px;display:flex;flex-direction:column;justify-content:center"><div style="font-size:12px;font-weight:700;color:${t.isVacant?'#EF4444':'var(--text)'}">${esc(t.name)}</div><div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}</div></div>`;
+    h+=`<div style="flex:1;display:flex;position:relative">`;
+    // Today line
+    h+=`<div style="position:absolute;left:${todayFrac*100}%;top:0;bottom:0;width:2px;background:#EF4444;z-index:5;opacity:0.6"></div>`;
+    // Year grid
+    years.forEach(()=>{h+=`<div style="flex:1;border-left:1px solid var(--border-light)"></div>`;});
+    // Lease bar
+    if(!t.isVacant&&t.leaseStart){
+      const startDate=new Date(t.leaseStart).getTime();
+      const endDate=t.leaseEnd==="MTM"?Date.now():new Date(t.leaseEnd).getTime();
+      const barLeft=Math.max(0,(startDate-rangeStart)/rangeLen*100);
+      const barRight=Math.min(100,(endDate-rangeStart)/rangeLen*100);
+      const barWidth=barRight-barLeft;
+      if(barWidth>0) h+=`<div style="position:absolute;left:${barLeft}%;width:${barWidth}%;top:10px;height:24px;background:${typeColor}30;border:1px solid ${typeColor}60;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:9px;font-weight:600;color:${typeColor};overflow:hidden;white-space:nowrap;z-index:2">$${t.rentPerSf||0}/SF${t.leaseEnd==="MTM"?" (MTM)":""}</div>`;
+    } else if(t.isVacant){
+      h+=`<div style="position:absolute;left:0%;width:100%;top:10px;height:24px;background:#EF444415;border:1px dashed #EF444440;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#EF4444;z-index:2">VACANT</div>`;
+    }
+    h+=`</div></div>`;
+  });
+  h+=`</div></div></div>`;
+  return h;
+}
+
 // ---- DD SECTION ----
 function renderDDSection() {
   if (state.ddDetailId) { const dd=state.ddDeals.find(d=>d.id===state.ddDetailId); if(dd) return renderDDDetail(dd); }
@@ -1527,6 +1576,8 @@ function renderDDDetail(dd){
       h+=`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border-radius:6px;font-size:12px"><span style="font-size:9px;padding:2px 5px;border-radius:3px;background:${tc}15;color:${tc};font-weight:700">${t.isVacant?'VACANT':(t.leaseType||'').toUpperCase()}</span><div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}${!t.isVacant&&t.rentPerSf?' · $'+t.rentPerSf+'/SF':''}</div></div>${t.subfolderLink?`<a href="${esc(t.subfolderLink)}" target="_blank" style="font-size:10px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">📁</a>`:''}</div>`;
     });
     h+=`</div></div>`;
+    // Tenant Timeline
+    h+=renderTenantTimeline(tenants);
   }
   // DD Checklist
   h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">DD Checklist</div><span style="font-size:12px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${done}/${tot} (${pct}%)</span></div>`;
@@ -1559,7 +1610,11 @@ function renderAMSection(){
     h+=`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(p.name)}</div>${p.address?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(p.address)}</div>`:''}`;
     h+=`<div style="display:flex;gap:16px;margin-top:10px;font-size:12px">${p.noi?`<div><span style="color:var(--text-muted)">NOI</span> <span style="font-weight:700;color:var(--text)">${fmt$(p.noi)}</span></div>`:''}${p.tenant?`<div><span style="color:var(--text-muted)">Tenant</span> <span style="font-weight:700;color:var(--text)">${esc(p.tenant)}</span></div>`:''}</div>`;
     if(active.length||overdue.length){h+=`<div style="display:flex;gap:6px;margin-top:8px">${active.length?`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#EFF6FF;color:#3B82F6;font-weight:600">${active.length} tasks</span>`:''}${overdue.length?`<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:#FEF2F2;color:#EF4444;font-weight:600">${overdue.length} overdue</span>`:''}</div>`;}
-    if(isExp&&tasks.length){h+=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;tasks.forEach(t=>{h+=`<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'}">${t.completed?'✓':'○'}</span><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span></div>`;});h+=`</div>`;}
+    if(isExp){
+      const tenants = p.tenants || [];
+      if(tenants.length) h += renderTenantTimeline(tenants);
+      if(tasks.length){h+=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">`;tasks.forEach(t=>{h+=`<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12px"><span style="color:${t.completed?'#10B981':'var(--text-muted)'}">${t.completed?'✓':'○'}</span><span style="color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span></div>`;});h+=`</div>`;}
+    }
     h+=`</div>`;
   });
   h+=`</div>`;return h;
@@ -1578,7 +1633,7 @@ function renderKPIsTab() {
     const filterDate = (d) => { if(!d)return false; const dt=new Date(d+"T00:00:00").getTime(); return dt>=periodStart && dt<periodEnd; };
     const findingProps = all.filter(d => d.createdAt && filterFn(d.createdAt)).length;
     const propUW = all.filter(d => d.uwGeneratedDate && filterFn(d.uwGeneratedDate)).length;
-    const loiCreated = all.filter(d => d.loiGeneratedDate && filterFn(d.loiGeneratedDate)).length;
+    const loiCreated = all.filter(d => (d.loiGeneratedDate && filterFn(d.loiGeneratedDate)) || (d.loiSentDate && filterDate(d.loiSentDate) && !d.loiGeneratedDate)).length;
     const loiSent = all.filter(d => d.loiSentDate && filterDate(d.loiSentDate)).length;
     let newCalls=0,followCalls=0;
     all.forEach(d=>{(d.callLog||[]).forEach((c,i)=>{if(c.time&&filterFn(c.time)){if(i===0)newCalls++;else followCalls++;}});});
@@ -1667,13 +1722,13 @@ function renderKPIsTab() {
   h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">`;
   // Flags
   h+=`<div style="background:var(--bg-card);border:1px solid ${flaggedDeals.length?'#FECACA':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${flaggedDeals.length?'#DC2626':'var(--text)'}">Deal Health Flags</div><span style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${flaggedDeals.length?'#DC2626':'#10B981'}">${flaggedDeals.length}</span></div>`;
-  if(flaggedDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;flaggedDeals.forEach(d=>{const flags=getDealFlagsDash(d);h+=`<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:var(--text-muted)"> — ${flags.map(f=>f.msg).join(", ")}</span></div>`;});h+=`</div>`;}
+  if(flaggedDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;flaggedDeals.forEach(d=>{const flags=getDealFlagsDash(d);const link=d.listingLink||d.costarLink||d.uwLink||"";h+=`<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;text-decoration:none;${link?'cursor:pointer':''}"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:var(--text-muted)"> — ${flags.map(f=>f.msg).join(", ")}</span></a>`;});h+=`</div>`;}
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">All deals healthy ✓</div>`;
   h+=`</div>`;
 
   // Stale
   h+=`<div style="background:var(--bg-card);border:1px solid ${staleDeals.length?'#FDE68A':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${staleDeals.length?'#D97706':'var(--text)'}">Stale Deals (7+ days idle)</div><span style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${staleDeals.length?'#D97706':'#10B981'}">${staleDeals.length}</span></div>`;
-  if(staleDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;staleDeals.forEach(d=>{const la=d.lastActivity||d.createdAt||0;const days=Math.floor((Date.now()-la)/DAY);h+=`<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;display:flex;justify-content:space-between"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:#D97706;font-weight:600">${days}d idle</span></div>`;});h+=`</div>`;}
+  if(staleDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;staleDeals.forEach(d=>{const la=d.lastActivity||d.createdAt||0;const days=Math.floor((Date.now()-la)/DAY);const link=d.listingLink||d.costarLink||d.uwLink||"";h+=`<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;text-decoration:none;display:flex;justify-content:space-between;${link?'cursor:pointer':''}"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:#D97706;font-weight:600">${days}d idle</span></a>`;});h+=`</div>`;}
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">No stale deals ✓</div>`;
   h+=`</div></div>`;
 
