@@ -861,6 +861,7 @@ async function loadDeals() {
       obj.stageChangedDate = parseInt(obj.stageChangedDate) || 0;
       obj.sfLoiLink = obj.sfLoiLink || "";
       obj.hotList = obj.hotList === "true" || obj.hotList === true;
+      obj.watchList = obj.watchList === "true" || obj.watchList === true;
       obj.brokerReached = obj.brokerReached === "true" || obj.brokerReached === true;
       obj.listingStatus = obj.listingStatus || "active";
       obj.loiResponseStatus = obj.loiResponseStatus || "";
@@ -903,7 +904,8 @@ async function loadDeals() {
 // ---- FILTERING ----
 function filteredDeals() {
   let list = state.deals;
-  if (state.stageFilter !== "all") list = list.filter(d => d.stage === state.stageFilter);
+  if (state.stageFilter === "watchlist") list = list.filter(d => d.watchList);
+  else if (state.stageFilter !== "all") list = list.filter(d => d.stage === state.stageFilter);
   else list = list.filter(d => d.stage !== "loi_accepted");
   if (state.search) {
     const q = state.search.toLowerCase();
@@ -919,7 +921,7 @@ function filteredDeals() {
 }
 
 function renderStageFilter() {
-  const stages = [{id:"all",label:"All Active"}, ...STAGES];
+  const stages = [{id:"all",label:"All Active"}, ...STAGES, {id:"watchlist",label:"★ Watch List",color:"#F59E0B"}];
   let h = `<div style="display:flex;gap:6px;padding:0 32px;margin-bottom:12px;flex-wrap:wrap">`;
   stages.forEach(s => {
     const isActive = state.stageFilter === s.id;
@@ -1754,12 +1756,44 @@ function renderKPIsTab() {
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">No stale deals ✓</div>`;
   h+=`</div></div>`;
 
+  // KPI Weekly History
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px">Weekly KPI History</div>`;
+  h+=`<div id="kpi-history-container"><div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">Loading history...</div></div></div>`;
+
   h+=`</div>`;
   return h;
 }
 
 function wireKPIEvents() {
-  // No interactive elements yet beyond header nav
+  // Load KPI history from separate sheet
+  const KPI_SHEET = "1x-6WAGl0qjBF4ZXEVMoQuVHDdurrspN7Ksg0wma6g0k";
+  const container = document.getElementById("kpi-history-container");
+  if (container) {
+    fetch(SHEETS_BASE + "/" + KPI_SHEET + "/values/Sheet1", { headers: { "Authorization": "Bearer " + state.accessToken } })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.values || data.values.length < 2) { container.innerHTML = `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">No history yet — snapshots save every Sunday at 11pm</div>`; return; }
+      const headers = data.values[0];
+      const rows = data.values.slice(1);
+      let h = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>`;
+      headers.forEach(col => { h += `<th style="text-align:${col==='Week Of'?'left':'center'};padding:8px 10px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid var(--border)">${col}</th>`; });
+      h += `</tr></thead><tbody>`;
+      rows.reverse().forEach(row => {
+        const grade = parseInt(row[8]) || 0;
+        const gc = grade >= 80 ? "#10B981" : grade >= 50 ? "#E8A838" : "#EF4444";
+        h += `<tr>`;
+        row.forEach((val, i) => {
+          if (i === 0) h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);font-weight:600;color:var(--text)">${val}</td>`;
+          else if (i === 8) h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);text-align:center;font-weight:700;color:${gc}">${val}</td>`;
+          else h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);text-align:center;color:var(--text)">${val}</td>`;
+        });
+        h += `</tr>`;
+      });
+      h += `</tbody></table></div>`;
+      container.innerHTML = h;
+    })
+    .catch(e => { container.innerHTML = `<div style="color:#EF4444;font-size:11px;padding:10px">Failed to load history</div>`; });
+  }
 }
 
 // ---- INIT ----
