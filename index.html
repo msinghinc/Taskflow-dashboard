@@ -1687,7 +1687,7 @@ function wireDDEvents(){
       const rrData=await rrResp.json();
       // Read Lease Schedule
       let leaseEvents=[];
-      try{const lsResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Lease Schedule'!A2:J200",{headers:{"Authorization":"Bearer "+state.accessToken}});const lsData=await lsResp.json();if(lsData.values)leaseEvents=lsData.values.map(row=>({tenantName:(row[0]||"").trim(),suite:(row[1]||"").trim(),eventType:(row[2]||"").trim(),startDate:(row[3]||"").toString().split("T")[0].split(" ")[0],endDate:(row[4]||"").toString().split("T")[0].split(" ")[0],monthlyRentSf:parseFloat(row[5])||0,annualRentSf:parseFloat(row[6])||0,bumpPct:parseFloat(row[7])||0,leaseType:(row[8]||"").trim().toLowerCase(),notes:(row[9]||"").trim()}));}catch(e){}
+      try{const lsResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Lease Schedule'!A2:J200",{headers:{"Authorization":"Bearer "+state.accessToken}});const lsData=await lsResp.json();if(lsData.values)leaseEvents=lsData.values.map(row=>{const s$=v=>parseFloat((v||"").toString().replace(/[$,%]/g,''))||0;return{tenantName:(row[0]||"").trim(),suite:(row[1]||"").trim(),eventType:(row[2]||"").trim(),startDate:(row[3]||"").toString().split("T")[0].split(" ")[0],endDate:(row[4]||"").toString().split("T")[0].split(" ")[0],monthlyRentSf:s$(row[5]),annualRentSf:s$(row[6]),bumpPct:s$(row[7]),leaseType:(row[8]||"").trim().toLowerCase(),notes:(row[9]||"").trim()};});}catch(e){}
       if(!rrData.values||rrData.values.length<2){alert("No rent roll data found");render();return;}
       const existingTenants=dd.tenants||[];
       const rows=rrData.values;const tenants=[];
@@ -1699,10 +1699,11 @@ function wireDDEvents(){
         const isVacant=lt==="vacant"||tenantName.toLowerCase()==="vacant";
         const existing=existingTenants.find(t=>t.name===tenantName&&t.suite===suite);
         const tenantEvts=leaseEvents.filter(e=>e.tenantName===tenantName&&e.suite===suite);
+        const strip$=v=>(typeof v==='string'?parseFloat(v.replace(/[$,%]/g,''))||0:parseFloat(v)||0);
         tenants.push({id:existing?existing.id:Math.random().toString(36).slice(2,10),name:tenantName,suite,sqft:gla,
           leaseType:isVacant?"vacant":(lt.includes("nnn")?"nnn":lt.includes("gross")?"gross":lt),
-          leaseStart:ls,leaseEnd:le==="MTM"?"MTM":le,rentPerSf:parseFloat(row[9])||0,annualRent:parseFloat(row[7])||0,
-          annualRecovery:parseFloat(row[10])||0,recoveryPerSf:parseFloat(row[12])||0,totalRevenue:parseFloat(row[13])||0,
+          leaseStart:ls,leaseEnd:le==="MTM"?"MTM":le,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),
+          annualRecovery:strip$(row[10]),recoveryPerSf:strip$(row[12]),totalRevenue:strip$(row[13]),
           isVacant,creditType:existing?existing.creditType:"",contactName:existing?existing.contactName:"",
           contactTitle:existing?existing.contactTitle:"",contactPhone:existing?existing.contactPhone:"",
           contactEmail:existing?existing.contactEmail:"",notes:existing?existing.notes:"",
