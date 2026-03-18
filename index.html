@@ -1701,7 +1701,7 @@ function wireDDEvents(){
         const tenantEvts=leaseEvents.filter(e=>e.tenantName===tenantName&&e.suite===suite);
         const strip$=v=>(typeof v==='string'?parseFloat(v.replace(/[$,%]/g,''))||0:parseFloat(v)||0);
         tenants.push({id:existing?existing.id:Math.random().toString(36).slice(2,10),name:tenantName,suite,sqft:gla,
-          leaseType:isVacant?"vacant":(lt.includes("nnn")?"nnn":lt.includes("gross")?"gross":lt),
+          leaseType:isVacant?"vacant":(tenantEvts.length&&tenantEvts[tenantEvts.length-1].leaseType?tenantEvts[tenantEvts.length-1].leaseType:(lt.includes("nnn")?"nnn":lt.includes("gross")?"gross":lt)),
           leaseStart:ls,leaseEnd:le==="MTM"?"MTM":le,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),
           annualRecovery:strip$(row[10]),recoveryPerSf:strip$(row[12]),totalRevenue:strip$(row[13]),
           isVacant,creditType:existing?existing.creditType:"",contactName:existing?existing.contactName:"",
