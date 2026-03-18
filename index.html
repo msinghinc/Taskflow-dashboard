@@ -1523,43 +1523,91 @@ function renderTenantTimeline(tenants) {
   tenants.forEach(t => {
     if(t.leaseStart){ const y=new Date(t.leaseStart).getFullYear(); if(y<minYear)minYear=y; }
     if(t.leaseEnd&&t.leaseEnd!=="MTM"){ const y=new Date(t.leaseEnd).getFullYear(); if(y+1>maxYear)maxYear=y+1; }
+    // Check lease schedule events for date range
+    (t.leaseSchedule||[]).forEach(ev=>{
+      if(ev.startDate){const y=new Date(ev.startDate).getFullYear();if(y<minYear)minYear=y;}
+      if(ev.endDate){const y=new Date(ev.endDate).getFullYear();if(y+1>maxYear)maxYear=y+1;}
+    });
   });
-  const years=[]; for(let y=minYear;y<=maxYear;y++)years.push(y);
+  // Reversed: newer years on left, older on right
+  const years=[]; for(let y=maxYear;y>=minYear;y--)years.push(y);
+
+  const eventColors = {
+    "Original Lease":"#3B82F6","Escalation":"#F59E0B","Extension":"#0EA5E9",
+    "Renewal":"#10B981","Option":"#8B5CF6","Amendment":"#EC4899",
+    "Addendum":"#6366F1","Free Rent":"#EF4444"
+  };
 
   let h=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px">`;
   h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border)"><div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Lease Timeline</div>`;
-  h+=`<div style="display:flex;gap:12px;font-size:10px;color:var(--text-muted)"><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#6366F1"></span>NNN</span><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#10B981"></span>Gross</span><span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#EF4444"></span>Vacant</span></div></div>`;
+  h+=`<div style="display:flex;gap:10px;font-size:9px;color:var(--text-muted);flex-wrap:wrap">`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#6366F1"></span>NNN</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#10B981"></span>Gross</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#EF4444"></span>Vacant</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#F59E0B"></span>Esc</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#0EA5E9"></span>Ext</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#8B5CF6"></span>Opt</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#EC4899"></span>Amend</span>`;
+  h+=`</div></div>`;
 
   h+=`<div style="overflow-x:auto"><div style="min-width:${Math.max(800,years.length*100)}px">`;
-  // Year headers
+  // Year headers (reversed)
   h+=`<div style="display:flex;border-bottom:1px solid var(--border)"><div style="width:180px;flex-shrink:0;padding:8px 16px;font-size:10px;color:var(--text-muted);font-weight:600">TENANT</div>`;
-  years.forEach(y=>{h+=`<div style="flex:1;padding:8px 0;text-align:center;font-size:12px;font-weight:700;color:${y===currentYear?'#3B82F6':'var(--text-muted)'};background:${y===currentYear?'#3B82F608':''};border-left:1px solid var(--border-light);cursor:pointer" data-action="year-click" data-year="${y}">${y}</div>`;});
+  years.forEach(y=>{h+=`<div style="flex:1;padding:8px 0;text-align:center;font-size:12px;font-weight:700;color:${y===currentYear?'#3B82F6':'var(--text-muted)'};background:${y===currentYear?'#3B82F608':''};border-left:1px solid var(--border-light)">${y}</div>`;});
   h+=`</div>`;
 
-  // Tenant rows
-  const rangeStart=new Date(minYear,0,1).getTime(), rangeEnd=new Date(maxYear+1,0,1).getTime(), rangeLen=rangeEnd-rangeStart;
-  const todayFrac=(Date.now()-rangeStart)/rangeLen;
+  // For positioning: range goes from maxYear+1 (left=0%) to minYear (right=100%) since reversed
+  const rangeLeftDate=new Date(maxYear+1,0,1).getTime(), rangeRightDate=new Date(minYear,0,1).getTime();
+  const rangeLen=Math.abs(rangeLeftDate-rangeRightDate);
+  const todayFrac=Math.max(0,Math.min(100,(rangeLeftDate-Date.now())/rangeLen*100));
 
   tenants.forEach(t=>{
     const typeColor=t.isVacant?"#EF4444":t.leaseType==="nnn"?"#6366F1":"#10B981";
-    h+=`<div style="display:flex;border-bottom:1px solid var(--border-light);min-height:48px">`;
+    h+=`<div style="display:flex;border-bottom:1px solid var(--border-light);min-height:56px">`;
     h+=`<div style="width:180px;flex-shrink:0;padding:8px 16px;display:flex;flex-direction:column;justify-content:center"><div style="font-size:12px;font-weight:700;color:${t.isVacant?'#EF4444':'var(--text)'}">${esc(t.name)}</div><div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}</div></div>`;
     h+=`<div style="flex:1;display:flex;position:relative">`;
     // Today line
-    h+=`<div style="position:absolute;left:${todayFrac*100}%;top:0;bottom:0;width:2px;background:#EF4444;z-index:5;opacity:0.6"></div>`;
+    h+=`<div style="position:absolute;left:${todayFrac}%;top:0;bottom:0;width:2px;background:#EF4444;z-index:5;opacity:0.7"></div>`;
     // Year grid
     years.forEach(()=>{h+=`<div style="flex:1;border-left:1px solid var(--border-light)"></div>`;});
-    // Lease bar
+
+    // Helper to convert date to % position (reversed)
+    const toPos = (dateStr) => {
+      const d = new Date(dateStr).getTime();
+      return Math.max(0, Math.min(100, (rangeLeftDate - d) / rangeLen * 100));
+    };
+
+    // Main lease bar
     if(!t.isVacant&&t.leaseStart){
-      const startDate=new Date(t.leaseStart).getTime();
-      const endDate=t.leaseEnd==="MTM"?Date.now():new Date(t.leaseEnd).getTime();
-      const barLeft=Math.max(0,(startDate-rangeStart)/rangeLen*100);
-      const barRight=Math.min(100,(endDate-rangeStart)/rangeLen*100);
+      const barLeft=toPos(t.leaseEnd==="MTM"?new Date().toISOString():t.leaseEnd);
+      const barRight=toPos(t.leaseStart);
       const barWidth=barRight-barLeft;
-      if(barWidth>0) h+=`<div style="position:absolute;left:${barLeft}%;width:${barWidth}%;top:10px;height:24px;background:${typeColor}30;border:1px solid ${typeColor}60;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:9px;font-weight:600;color:${typeColor};overflow:hidden;white-space:nowrap;z-index:2">$${t.rentPerSf||0}/SF${t.leaseEnd==="MTM"?" (MTM)":""}</div>`;
+      if(barWidth>0) h+=`<div style="position:absolute;left:${barLeft}%;width:${barWidth}%;top:14px;height:24px;background:${typeColor}25;border:1px solid ${typeColor}50;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:9px;font-weight:600;color:${typeColor};overflow:hidden;white-space:nowrap;z-index:2">$${t.rentPerSf||0}/SF${t.leaseEnd==="MTM"?" (MTM)":""}</div>`;
     } else if(t.isVacant){
-      h+=`<div style="position:absolute;left:0%;width:100%;top:10px;height:24px;background:#EF444415;border:1px dashed #EF444440;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#EF4444;z-index:2">VACANT</div>`;
+      h+=`<div style="position:absolute;left:0%;width:100%;top:14px;height:24px;background:#EF444410;border:1px dashed #EF444430;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#EF4444;z-index:2">VACANT</div>`;
     }
+
+    // Lease schedule event markers
+    const events = t.leaseSchedule || [];
+    events.forEach(ev=>{
+      if(!ev.startDate) return;
+      const evPos = toPos(ev.startDate);
+      const color = eventColors[ev.eventType] || "#94A3B8";
+      const isRange = ev.endDate && (ev.eventType==="Extension"||ev.eventType==="Renewal"||ev.eventType==="Option"||ev.eventType==="Free Rent");
+
+      if(isRange && ev.endDate){
+        // Range bar (dashed for options, solid for extensions/renewals)
+        const evLeft=toPos(ev.endDate);
+        const evRight=toPos(ev.startDate);
+        const evWidth=evRight-evLeft;
+        const isDashed = ev.eventType==="Option";
+        if(evWidth>0) h+=`<div style="position:absolute;left:${evLeft}%;width:${evWidth}%;top:6px;height:8px;background:${color}20;border:1px ${isDashed?'dashed':'solid'} ${color}50;border-radius:3px;z-index:3" title="${ev.eventType}: ${ev.startDate} to ${ev.endDate}${ev.notes?' — '+ev.notes:''}"></div>`;
+      } else {
+        // Dot marker for escalations, amendments, addendums
+        h+=`<div style="position:absolute;left:${evPos}%;top:8px;width:8px;height:8px;border-radius:50%;background:${color};border:2px solid var(--bg-card);z-index:4;cursor:pointer;margin-left:-4px" title="${ev.eventType}${ev.bumpPct?' '+ev.bumpPct+'%':''}${ev.annualRentSf?' $'+ev.annualRentSf+'/SF':''}${ev.notes?' — '+ev.notes:''}"></div>`;
+      }
+    });
+
     h+=`</div></div>`;
   });
   h+=`</div></div></div>`;
@@ -1592,9 +1640,13 @@ function renderDDDetail(dd){
   if(dd.uwLink)h+=`<a href="${esc(dd.uwLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#D97706;text-decoration:none;font-weight:500">📊 UW</a>`;
   DD_STAGES.forEach(s=>{h+=`<button data-action="dd-set-stage" data-value="${s.id}" style="padding:6px 12px;border:1px solid ${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--border)'};border-radius:8px;font-size:11px;cursor:pointer;background:${(dd.stage||"negotiation_psa")===s.id?s.color+'15':'var(--bg-card)'};color:${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${s.label}</button>`;});
   h+=`<button data-action="dd-move-to-acq" style="padding:6px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'DM Sans',sans-serif;margin-left:auto">↩ Move to Acquisitions</button></div>`;
-  // Tenants
+  // Tenants — with sync button
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">`;
+  h+=`<span style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">Tenants${tenants.length?' ('+tenants.length+')':''}</span>`;
+  if(dd.uwLink)h+=`<button data-action="dd-sync-uw" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">${tenants.length?'Re-sync from UW':'Sync from UW'}</button>`;
+  h+=`</div>`;
   if(tenants.length){
-    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text);margin-bottom:12px">Tenants (${tenants.length})</div>`;
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px">`;
     h+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">`;
     tenants.forEach((t,ti)=>{const tc=t.isVacant?"#EF4444":t.leaseType==="nnn"?"#6366F1":"#10B981";
       h+=`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border-radius:6px;font-size:12px"><span style="font-size:9px;padding:2px 5px;border-radius:3px;background:${tc}15;color:${tc};font-weight:700">${t.isVacant?'VACANT':(t.leaseType||'').toUpperCase()}</span><div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font-size:10px;color:var(--text-muted)">${t.suite?'Suite '+t.suite+' · ':''}${t.sqft?fmtNum(t.sqft)+' SF':''}${!t.isVacant&&t.rentPerSf?' · $'+t.rentPerSf+'/SF':''}</div></div>${t.subfolderLink?`<a href="${esc(t.subfolderLink)}" target="_blank" style="font-size:10px;color:#3B82F6;text-decoration:none" onclick="event.stopPropagation()">📁</a>`:''}</div>`;
@@ -1619,6 +1671,46 @@ function wireDDEvents(){
   document.querySelectorAll("[data-action='dd-toggle-task']").forEach(btn=>{btn.addEventListener("click",()=>{const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.tasks[parseInt(btn.dataset.idx)].completed=!dd.tasks[parseInt(btn.dataset.idx)].completed;saveDDToSheet();render();}});});
   document.querySelectorAll("[data-action='dd-del-task']").forEach(btn=>{btn.addEventListener("click",()=>{const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.tasks.splice(parseInt(btn.dataset.idx),1);saveDDToSheet();render();}});});
   const addTask=document.querySelector("[data-action='dd-add-task']");if(addTask)addTask.addEventListener("click",()=>{const text=prompt("New DD task:");if(!text?.trim())return;const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);if(dd){dd.tasks.push({id:Math.random().toString(36).slice(2,10),text:text.trim(),completed:false,dueDate:"",notes:""});saveDDToSheet();render();}});
+  // Sync from UW
+  const syncBtn=document.querySelector("[data-action='dd-sync-uw']");
+  if(syncBtn)syncBtn.addEventListener("click",async()=>{
+    const dd=state.ddDeals.find(d=>d.id===state.ddDetailId);
+    if(!dd||!dd.uwLink){alert("No UW link found.");return;}
+    syncBtn.textContent="Syncing...";syncBtn.style.pointerEvents="none";
+    try{
+      const uwMatch=dd.uwLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if(!uwMatch){alert("Invalid UW link");return;}
+      const uwSheetId=uwMatch[1];
+      let folderId="";if(dd.folderLink){const m=dd.folderLink.match(/folders\/([a-zA-Z0-9_-]+)/);if(m)folderId=m[1];}
+      // Read Rent Roll
+      const rrResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Rent Roll'!A13:P50",{headers:{"Authorization":"Bearer "+state.accessToken}});
+      const rrData=await rrResp.json();
+      // Read Lease Schedule
+      let leaseEvents=[];
+      try{const lsResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Lease Schedule'!A2:J200",{headers:{"Authorization":"Bearer "+state.accessToken}});const lsData=await lsResp.json();if(lsData.values)leaseEvents=lsData.values.map(row=>({tenantName:(row[0]||"").trim(),suite:(row[1]||"").trim(),eventType:(row[2]||"").trim(),startDate:(row[3]||"").toString().split("T")[0].split(" ")[0],endDate:(row[4]||"").toString().split("T")[0].split(" ")[0],monthlyRentSf:parseFloat(row[5])||0,annualRentSf:parseFloat(row[6])||0,bumpPct:parseFloat(row[7])||0,leaseType:(row[8]||"").trim().toLowerCase(),notes:(row[9]||"").trim()}));}catch(e){}
+      if(!rrData.values||rrData.values.length<2){alert("No rent roll data found");render();return;}
+      const existingTenants=dd.tenants||[];
+      const rows=rrData.values;const tenants=[];
+      for(let i=1;i<rows.length;i++){
+        const row=rows[i];const tenantName=(row[1]||"").trim();
+        if(!tenantName||tenantName==="Total"||tenantName==="Vacant "||tenantName==="Occupied")break;
+        const lt=(row[0]||"").trim().toLowerCase();const suite=(row[2]||"").trim();const gla=parseFloat(row[3])||0;
+        const ls=(row[5]||"").toString().split("T")[0].split(" ")[0];const le=(row[6]||"").toString().split("T")[0].split(" ")[0];
+        const isVacant=lt==="vacant"||tenantName.toLowerCase()==="vacant";
+        const existing=existingTenants.find(t=>t.name===tenantName&&t.suite===suite);
+        const tenantEvts=leaseEvents.filter(e=>e.tenantName===tenantName&&e.suite===suite);
+        tenants.push({id:existing?existing.id:Math.random().toString(36).slice(2,10),name:tenantName,suite,sqft:gla,
+          leaseType:isVacant?"vacant":(lt.includes("nnn")?"nnn":lt.includes("gross")?"gross":lt),
+          leaseStart:ls,leaseEnd:le==="MTM"?"MTM":le,rentPerSf:parseFloat(row[9])||0,annualRent:parseFloat(row[7])||0,
+          annualRecovery:parseFloat(row[10])||0,recoveryPerSf:parseFloat(row[12])||0,totalRevenue:parseFloat(row[13])||0,
+          isVacant,creditType:existing?existing.creditType:"",contactName:existing?existing.contactName:"",
+          contactTitle:existing?existing.contactTitle:"",contactPhone:existing?existing.contactPhone:"",
+          contactEmail:existing?existing.contactEmail:"",notes:existing?existing.notes:"",
+          documents:existing?existing.documents:[],subfolderLink:existing?existing.subfolderLink:"",leaseSchedule:tenantEvts});
+      }
+      dd.tenants=tenants;await saveDDToSheet();render();
+    }catch(e){alert("Sync error: "+e.message);render();}
+  });
   // KPI period toggle
   document.querySelectorAll("[data-kpi-period]").forEach(btn=>{btn.addEventListener("click",()=>{state.kpiPeriod=btn.dataset.kpiPeriod;render();});});
 }
