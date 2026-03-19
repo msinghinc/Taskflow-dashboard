@@ -956,6 +956,7 @@ function render() {
     h += renderStageFilter();
     h += `<div class="main">`;
     if (state.view === "kanban") h += renderKanban();
+    else if (state.view === "map") h += `<div style="border-radius:12px;overflow:hidden;border:1px solid var(--border)"><iframe src="https://www.google.com/maps/d/embed?mid=1acxNqShNiz2IB3wbCLl1NLu88DpkuTs&ehbc=2E312F" width="100%" height="600" style="border:none"></iframe></div>`;
     else h += renderTable();
     h += `</div>`;
     if (state.selectedDeal) h += renderModal(state.selectedDeal);
@@ -993,6 +994,7 @@ function renderHeader() {
     subToggle = `<div class="view-toggle" style="margin-left:12px">
       <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
       <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
+      <button class="view-btn ${state.view==='map'?'active':''}" data-view="map">Map</button>
     </div>`;
   }
   return `<div class="header"><div class="header-inner">
