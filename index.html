@@ -541,6 +541,9 @@ let state = {
   sortCol: null,
   sortDir: "asc",
   selectedDeal: null,
+  selectedDealDetail: null,
+  dealDetailTenants: [],
+  dealDetailComps: [],
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -868,6 +871,12 @@ async function loadDeals() {
       obj.loiCounteredDate = parseInt(obj.loiCounteredDate) || 0;
       try { obj.callLog = obj.callLog ? JSON.parse(obj.callLog) : []; } catch(e) { obj.callLog = []; }
       try { obj.stageHistory = obj.stageHistory ? JSON.parse(obj.stageHistory) : []; } catch(e) { obj.stageHistory = []; }
+      obj.propertyCondition = obj.propertyCondition || "";
+      obj.roofCondition = obj.roofCondition || "";
+      obj.parkingCondition = obj.parkingCondition || "";
+      obj.hvacNotes = obj.hvacNotes || "";
+      obj.deferredMaint = parseFloat(obj.deferredMaint) || 0;
+      obj.envConcerns = obj.envConcerns || "";
       return obj;
     });
   } else { state.deals = []; }
@@ -952,13 +961,19 @@ function render() {
 
   let h = renderHeader();
   if (state.section === "acquisitions") {
-    h += renderStats();
-    h += renderStageFilter();
-    h += `<div class="main">`;
-    if (state.view === "kanban") h += renderKanban();
-    else h += renderTable();
-    h += `</div>`;
-    if (state.selectedDeal) h += renderModal(state.selectedDeal);
+    if (state.selectedDealDetail) {
+      const det = state.deals.find(d => d.id === state.selectedDealDetail);
+      if (det) { h += `<div class="main">` + renderDealDetail(det) + `</div>`; }
+      else { state.selectedDealDetail = null; }
+    }
+    if (!state.selectedDealDetail) {
+      h += renderStats();
+      h += renderStageFilter();
+      h += `<div class="main">`;
+      if (state.view === "kanban") h += renderKanban();
+      else h += renderTable();
+      h += `</div>`;
+    }
   } else if (state.section === "dd") {
     h += `<div class="main">` + renderDDSection() + `</div>`;
   } else if (state.section === "am") {
@@ -971,6 +986,7 @@ function render() {
   app.innerHTML = h;
   wireHeaderEvents();
   wireEvents();
+  if (state.section === "acquisitions" && state.selectedDealDetail) wireDealDetailEvents();
   if (state.section === "dd") wireDDEvents();
   if (state.section === "am") wireAMEvents();
   if (state.section === "contacts") wireContactsEvents();
@@ -1157,89 +1173,372 @@ function renderTable() {
   return h;
 }
 
-// ---- MODAL ----
-function renderModal(d) {
+// ---- SCORECARD SCORING ----
+function calcPhysicalScore(d) {
+  if (!d.propertyCondition) return null;
+  const condMap = { excellent:9, good:7, fair:5, poor:3 };
+  let score = condMap[d.propertyCondition.toLowerCase()] || 5;
+  if (d.roofCondition) score += 0.5;
+  if (d.parkingCondition) score += 0.5;
+  if (d.deferredMaint > 50000) score -= 1;
+  if (d.envConcerns) score -= 1;
+  return Math.max(0, Math.min(10, Math.round(score * 10) / 10));
+}
+function calcCompsScore(d) {
+  const compsCount = (d.callLog || []).filter(c => c.status === "Broker Sending Info").length;
+  if (!compsCount) return null;
+  if (compsCount === 1) return 4;
+  if (compsCount === 2) return 6;
+  if (compsCount === 3) return 8;
+  if (compsCount === 4) return 9;
+  return 10;
+}
+function calcFinancialScore(d) {
+  if (!d.noi) return null;
+  let score = 0;
+  if (d.noi) score += 3;
+  if (d.capRate) score += 2;
+  if (d.uwLink) score += 2;
+  if (d.uwExpenseRatio) score += 1.5;
+  if (d.uwVacancy) score += 1.5;
+  return Math.min(10, score);
+}
+function calcTenantCreditScore(tenants) {
+  const active = (tenants || []).filter(t => !t.isVacant);
+  if (!active.length) return null;
+  const creditMap = { national:10, regional:7, local:5, "mom & pop":3, "mom and pop":3 };
+  let totalRent = 0, weightedScore = 0;
+  active.forEach(t => {
+    const rent = t.annualRent || 0;
+    const key = (t.creditType || "").toLowerCase();
+    const score = creditMap[key] || 5;
+    totalRent += rent; weightedScore += score * rent;
+  });
+  if (!totalRent) return active.length ? (active.reduce((s,t)=>s+(creditMap[(t.creditType||"").toLowerCase()]||5),0)/active.length) : null;
+  return Math.round(weightedScore / totalRent * 10) / 10;
+}
+function calcLeaseRiskScore(tenants, walt) {
+  const active = (tenants || []).filter(t => !t.isVacant);
+  if (!active.length && !walt) return null;
+  const w = parseFloat(walt) || 0;
+  let score = w > 7 ? 10 : w > 5 ? 8 : w > 3 ? 6 : w > 1 ? 4 : 2;
+  const hasMTM = active.some(t => t.isMTM || (t.leaseEnd || "").toUpperCase() === "MTM");
+  if (hasMTM) score -= 2;
+  const now = Date.now();
+  const in24mo = now + 730 * 864e5;
+  active.forEach(t => {
+    if (!t.leaseEnd || t.isMTM) return;
+    const end = new Date(t.leaseEnd + "T00:00:00").getTime();
+    if (end < in24mo) score -= 1;
+  });
+  return Math.max(0, Math.min(10, score));
+}
+function renderScorecard(d, tenants) {
+  const CIRC = 175.9;
+  function ring(score, label, noDataLabel) {
+    const hasData = score !== null && score !== undefined;
+    const color = !hasData ? "#CBD5E1" : score >= 8 ? "#10B981" : score >= 5 ? "#E8A838" : "#EF4444";
+    const filled = hasData ? (score / 10) * CIRC : 0;
+    const rem = CIRC - filled;
+    const display = hasData ? score : "–";
+    return `<div style="text-align:center;flex:1">
+      <svg width="70" height="70" viewBox="0 0 70 70">
+        <circle cx="35" cy="35" r="28" fill="none" stroke="#E2E8F0" stroke-width="5"/>
+        <circle cx="35" cy="35" r="28" fill="none" stroke="${color}" stroke-width="5"
+          stroke-dasharray="${filled.toFixed(1)} ${rem.toFixed(1)}" stroke-dashoffset="44" stroke-linecap="round"
+          transform="rotate(-90 35 35)"/>
+        <text x="35" y="39" text-anchor="middle" font-size="15" font-weight="800" fill="${color}" font-family="Outfit,sans-serif">${display}</text>
+      </svg>
+      <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-top:2px">${label}</div>
+      ${!hasData ? `<div style="font-size:9px;color:var(--text-muted)">${noDataLabel}</div>` : ""}
+    </div>`;
+  }
+  const phys = calcPhysicalScore(d);
+  const comps = calcCompsScore(d);
+  const fin = calcFinancialScore(d);
+  const credit = calcTenantCreditScore(tenants);
+  const lease = calcLeaseRiskScore(tenants, d.walt);
+  const scores = [phys, comps, fin, credit, lease].filter(s => s !== null);
+  const overall = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*10)/10 : null;
+  const ovColor = !overall ? "#CBD5E1" : overall >= 8 ? "#10B981" : overall >= 5 ? "#E8A838" : "#EF4444";
+  const ovFilled = overall ? (overall/10)*CIRC : 0;
+  return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Scorecard</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${ring(phys,"Physical","No Data")}
+      ${ring(comps,"Comps","Need Comps")}
+      ${ring(fin,"Financial","No NOI")}
+      ${ring(credit,"Tenant Credit","Sync UW")}
+      ${ring(lease,"Lease Risk","No Tenants")}
+      <div style="width:1px;height:60px;background:var(--border);margin:0 8px"></div>
+      <div style="text-align:center;flex:1">
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" r="32" fill="none" stroke="#E2E8F0" stroke-width="6"/>
+          <circle cx="40" cy="40" r="32" fill="none" stroke="${ovColor}" stroke-width="6"
+            stroke-dasharray="${ovFilled.toFixed(1)} ${(CIRC-ovFilled).toFixed(1)}" stroke-dashoffset="50" stroke-linecap="round"
+            transform="rotate(-90 40 40)"/>
+          <text x="40" y="45" text-anchor="middle" font-size="18" font-weight="800" fill="${ovColor}" font-family="Outfit,sans-serif">${overall ?? "–"}</text>
+        </svg>
+        <div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-top:2px">Overall</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---- DEAL DETAIL PAGE ----
+function renderDealDetail(d) {
   const s = stg(d.stage);
   const p = pri(d.priority);
   const sc = parseFloat(d.score);
   const priceSf = d.sqft > 0 ? "$" + Math.round(d.askingPrice / d.sqft) : "—";
   const ptMap = { stnnn:"Single Tenant NNN", multi:"Multi-Tenant Retail", industrial:"Industrial", outparcel:"Outparcel", other:"Other" };
+  const condOpts = ["","Excellent","Good","Fair","Poor"];
+  const tenants = state.dealDetailTenants;
 
-  let h = `<div class="modal-overlay" id="modal-overlay"><div class="modal">
-    <div class="modal-header">
-      <div>
-        <h2>${esc(d.name)}</h2>
-        <div style="margin-top:4px;display:flex;gap:8px;align-items:center">
-          <span class="stage-badge" style="color:${s.color};background:${s.color}15">${s.label}</span>
-          <span class="pri-badge" style="color:${p.color};background:${p.bg}">${p.label}</span>
-          ${sc ? `<span class="td-score" style="color:${scoreColor(sc)};background:${scoreBg(sc)}">${sc}/10</span>` : ""}
-        </div>
-      </div>
-      <button class="modal-close" id="modal-close">✕</button>
+  let h = `<div style="max-width:1100px;margin:0 auto;padding-bottom:40px">`;
+
+  // Header bar
+  h += `<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+    <button data-action="deal-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'DM Sans',sans-serif">← Back</button>
+    <div style="flex:1">
+      <div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(d.name)}</div>
+      <div style="font-size:12px;color:var(--text-muted)">${esc(d.address)}</div>
     </div>
-    <div class="modal-body">
-      <div class="modal-section">
-        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">${esc(d.address)}</div>
+    <span class="stage-badge" style="color:${s.color};background:${s.color}15;font-size:11px;padding:4px 12px">${s.label}</span>
+    <span class="pri-badge" style="color:${p.color};background:${p.bg}">${p.label}</span>
+    ${sc ? `<span class="td-score" style="color:${scoreColor(sc)};background:${scoreBg(sc)}">${sc}/10</span>` : ""}
+  </div>`;
+
+  // Info grid
+  const dom = d.listingDate ? Math.floor((Date.now() - new Date(d.listingDate+"T00:00:00").getTime()) / 864e5) : null;
+  h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">`;
+  [["Asking Price",fmt$(d.askingPrice)],["NOI",fmt$(d.noi)],["Cap Rate",d.capRate?d.capRate+"%":"—"],
+   ["Sq Ft",d.sqft?fmtNum(d.sqft):"—"],["Price/SF",priceSf],["Acreage",d.acreage||"—"],
+   ["# Tenants",d.numTenants||"—"],["WALT",d.walt||"—"],["Type",ptMap[d.propertyType]||"—"],
+   ["VPD",d.vehiclesPerDay?fmtNum(d.vehiclesPerDay):"—"],["3mi Pop",d.pop3mi?fmtNum(d.pop3mi):"—"],["3mi AHI",d.ahi3mi?fmt$(d.ahi3mi):"—"],
+   ["Listing Date",d.listingDate||"—"],["Listing Status",d.listingStatus||"—"],["Days on Market",dom!==null?dom+"d":"—"]
+  ].forEach(([l,v])=>{h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">${l}</div><div style="font-size:14px;font-weight:700;color:var(--text)">${v}</div></div>`;});
+  h += `</div></div>`;
+
+  // Links row
+  const links=[];
+  if(d.listingLink){const src=d.listingLink.includes("crexi")?"Crexi":d.listingLink.includes("costar")?"CoStar":"Listing";links.push({label:src,url:d.listingLink,color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"});}
+  if(d.uwLink)links.push({label:"UW",url:d.uwLink,color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"});
+  if(d.costarLink)links.push({label:"CoStar",url:d.costarLink,color:"#0EA5E9",bg:"#F0F9FF",border:"#BAE6FD"});
+  if(d.loiLink)links.push({label:"LOI",url:d.loiLink,color:"#16A34A",bg:"#F0FDF4",border:"#BBF7D0"});
+  if(d.sfLoiLink)links.push({label:"SF LOI",url:d.sfLoiLink,color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"});
+  if(d.omLink)links.push({label:"OM",url:d.omLink,color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"});
+  if(links.length){h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">`;links.forEach(l=>{h+=`<a href="${esc(l.url)}" target="_blank" style="padding:6px 14px;background:${l.bg};border:1px solid ${l.border};border-radius:8px;font-size:12px;color:${l.color};text-decoration:none;font-weight:600">🔗 ${l.label}</a>`;});h+=`</div>`;}
+
+  // Scorecard
+  h += renderScorecard(d, tenants);
+
+  // Broker section
+  if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Broker</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          ${d.broker?`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(d.broker)}</div>`:""}
+          ${d.brokerContact?`<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${esc(d.brokerContact)}</div>`:""}
+          <div style="display:flex;gap:16px;margin-top:6px;font-size:12px;color:var(--text-secondary)">
+            ${d.brokerPhone?`<span>📞 ${esc(d.brokerPhone)}</span>`:""}
+            ${d.brokerEmail?`<span>✉ ${esc(d.brokerEmail)}</span>`:""}
+          </div>
+          <div style="margin-top:8px"><span style="font-size:10px;padding:3px 8px;border-radius:4px;background:${d.brokerReached?"#DCFCE7":"#FEF2F2"};color:${d.brokerReached?"#16A34A":"#DC2626"};font-weight:600">${d.brokerReached?"✓ Reached":"Not Reached"}</span></div>
+        </div>
+        ${d.brokerEmail?`<a href="mailto:${esc(d.brokerEmail)}?subject=RE: ${esc(d.name)}" style="padding:8px 16px;background:var(--bg-dark);color:#fff;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none">✉ Email Broker</a>`:""}
       </div>
-      <div class="modal-grid">`;
-
-  [["Asking Price", fmt$(d.askingPrice)], ["NOI", fmt$(d.noi)], ["Cap Rate", d.capRate ? d.capRate+"%" : "—"],
-   ["Sq Ft", d.sqft ? fmtNum(d.sqft) : "—"], ["Acreage", d.acreage || "—"], ["Price/SF", priceSf],
-   ["# Tenants", d.numTenants || "—"], ["WALT", d.walt || "—"], ["Type", ptMap[d.propertyType] || "—"],
-   ["3mi Pop", d.pop3mi ? fmtNum(d.pop3mi) : "—"], ["3mi AHI", d.ahi3mi ? fmt$(d.ahi3mi) : "—"], ["Score", sc ? sc+"/10" : "—"]
-  ].forEach(([l,v]) => {
-    h += `<div class="modal-metric"><div class="modal-metric-label">${l}</div><div class="modal-metric-value">${v}</div></div>`;
-  });
-  h += `</div>`;
-
-  // Broker
-  if (d.broker || d.brokerContact || d.brokerPhone || d.brokerEmail) {
-    h += `<div class="modal-section"><div class="modal-section-label">Broker</div><div class="modal-info">`;
-    if (d.broker) h += `<strong>${esc(d.broker)}</strong>`;
-    if (d.brokerContact) h += ` — ${esc(d.brokerContact)}`;
-    if (d.brokerPhone) h += `<br>📞 ${esc(d.brokerPhone)}`;
-    if (d.brokerEmail) h += `<br>✉ ${esc(d.brokerEmail)}`;
-    h += `</div></div>`;
-  }
-
-  // Links
-  const links = [];
-  if (d.listingLink) { const src=d.listingLink.includes("crexi")?"Crexi Listing":d.listingLink.includes("costar")?"CoStar Listing":"Listing"; links.push({label:src,url:d.listingLink,color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"}); }
-  if (d.uwLink) links.push({label:"Underwriting",url:d.uwLink,color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"});
-  if (d.costarLink) links.push({label:"CoStar Property",url:d.costarLink,color:"#0EA5E9",bg:"#F0F9FF",border:"#BAE6FD"});
-  if (d.loiLink) links.push({label:"View LOI",url:d.loiLink,color:"#16A34A",bg:"#F0FDF4",border:"#BBF7D0"});
-
-  if (links.length) {
-    h += `<div class="modal-section"><div class="modal-section-label">Links</div><div class="modal-links">`;
-    links.forEach(l => {
-      h += `<a href="${esc(l.url)}" target="_blank" class="modal-link-pill" style="color:${l.color};background:${l.bg};border:1px solid ${l.border}">🔗 ${l.label}</a>`;
-    });
-    h += `</div></div>`;
-  }
-
-  // Notes
-  if (d.notes) {
-    h += `<div class="modal-section"><div class="modal-section-label">Notes</div><div class="modal-info">${esc(d.notes)}</div></div>`;
+    </div>`;
   }
 
   // Call Log
-  if (d.callLog && d.callLog.length) {
-    h += `<div class="modal-section"><div class="modal-section-label">Call Log (${d.callLog.length})</div><div style="max-height:160px;overflow-y:auto">`;
-    [...d.callLog].reverse().forEach(c => {
-      const date = c.time ? new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
-      const statusColor = c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"?"#EF4444":c.status==="Wrong Number"?"#EF4444":"#64748B";
-      h += `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span style="color:var(--text-muted);margin-right:8px">${date}</span><span style="color:${statusColor};font-weight:600">${esc(c.status||"Called")}</span>${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px">${esc(c.note)}</div>`:''}</div>`;
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Call Log${d.callLog&&d.callLog.length?" ("+d.callLog.length+")":""}</div>
+      <button data-action="deal-log-call" style="padding:6px 14px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">+ Log Call</button>
+    </div>`;
+  if(d.callLog&&d.callLog.length){
+    h+=`<div style="max-height:240px;overflow-y:auto">`;
+    [...d.callLog].reverse().forEach(c=>{
+      const date=c.time?new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):"";
+      const statusColor=c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"||c.status==="Wrong Number"?"#EF4444":"#64748B";
+      h+=`<div style="padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:var(--text-muted);min-width:80px">${date}</span>
+          <span style="color:${statusColor};font-weight:700">${esc(c.status||"Called")}</span>
+        </div>
+        ${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:4px;padding-left:88px">${esc(c.note)}</div>`:""}
+      </div>`;
     });
-    h += `</div></div>`;
+    h+=`</div>`;
+  } else {h+=`<div style="color:var(--text-muted);font-size:12px;padding:12px 0">No calls logged yet.</div>`;}
+  h+=`</div>`;
+
+  // Property Condition
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Property Condition</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">`;
+  [["propertyCondition","Overall","select"],["roofCondition","Roof","select"],["parkingCondition","Parking","select"],
+   ["hvacNotes","HVAC Notes","text"],["deferredMaint","Deferred Maint ($)","number"],["envConcerns","Environmental Concerns","text"]
+  ].forEach(([field,label,type])=>{
+    h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">${label}</div>`;
+    if(type==="select"){
+      h+=`<select data-cond-field="${field}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif">`;
+      condOpts.forEach(o=>{h+=`<option value="${o}" ${(d[field]||"").toLowerCase()===o.toLowerCase()?"selected":""}>${o||"— Select —"}</option>`;});
+      h+=`</select>`;
+    } else {
+      h+=`<input type="${type}" data-cond-field="${field}" value="${esc(String(d[field]||""))}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif">`;
+    }
+    h+=`</div>`;
+  });
+  h+=`</div>
+    <button data-action="deal-save-condition" style="margin-top:14px;padding:7px 18px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">Save Condition</button>
+  </div>`;
+
+  // Tenant Timeline
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Tenants${tenants.length?" ("+tenants.length+")":""}</div>
+      ${d.uwLink?`<button data-action="deal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">${tenants.length?"Re-sync from UW":"View Tenants"}</button>`:""}
+    </div>
+    <div id="deal-tenants-container">${tenants.length?renderTenantTimeline(tenants):"<div style='color:var(--text-muted);font-size:12px'>Click View Tenants to sync from UW.</div>"}</div>
+  </div>`;
+
+  // Notes
+  if(d.notes){h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px"><div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Notes</div><div style="font-size:13px;color:var(--text-secondary);line-height:1.6">${esc(d.notes)}</div></div>`;}
+
+  // Action buttons
+  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:8px">`;
+  STAGES.forEach(stg=>{h+=`<button data-action="deal-set-stage" data-value="${stg.id}" style="padding:6px 12px;border:1px solid ${d.stage===stg.id?stg.color:"var(--border)"};border-radius:8px;font-size:11px;cursor:pointer;background:${d.stage===stg.id?stg.color+"15":"var(--bg-card)"};color:${d.stage===stg.id?stg.color:"var(--text-muted)"};font-weight:600;font-family:'DM Sans',sans-serif">${stg.label}</button>`;});
+  h+=`<button data-action="deal-remove" style="margin-left:auto;padding:6px 14px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'DM Sans',sans-serif">✕ Remove Deal</button>`;
+  h+=`</div>`;
+
+  // Call log overlay (hidden by default)
+  h+=`<div id="call-log-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:var(--bg-card);border-radius:14px;padding:28px;width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
+      <div style="font-family:'Outfit',sans-serif;font-size:17px;font-weight:800;margin-bottom:18px">Log a Call</div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">STATUS</div>
+        <select id="call-status-input" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif">
+          <option>Called — No Answer</option>
+          <option>Left Voicemail</option>
+          <option>Broker Sending Info</option>
+          <option>Not Interested</option>
+          <option>Deal Sold</option>
+          <option>Wrong Number</option>
+          <option>Other</option>
+        </select>
+      </div>
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">NOTE (optional)</div>
+        <textarea id="call-note-input" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;resize:none" placeholder="Add a note..."></textarea>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="call-log-save" style="flex:1;padding:10px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif">Save</button>
+        <button id="call-log-cancel" style="padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif">Cancel</button>
+      </div>
+    </div>
+  </div>`;
+
+  h+=`</div>`;
+  return h;
+}
+
+function wireDealDetailEvents() {
+  const d = state.deals.find(dl => dl.id === state.selectedDealDetail);
+  if (!d) return;
+
+  // Back
+  const back = document.querySelector("[data-action='deal-back']");
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; render(); });
+
+  // Stage selector
+  document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
+    btn.addEventListener("click", async () => { d.stage = btn.dataset.value; await saveDealsToSheet(); render(); });
+  });
+
+  // Remove deal
+  const removeBtn = document.querySelector("[data-action='deal-remove']");
+  if (removeBtn) removeBtn.addEventListener("click", async () => {
+    if (!confirm("Remove this deal? This cannot be undone.")) return;
+    state.deals = state.deals.filter(dl => dl.id !== d.id);
+    state.selectedDealDetail = null; state.dealDetailTenants = [];
+    await saveDealsToSheet(); render();
+  });
+
+  // Save condition
+  const saveCondBtn = document.querySelector("[data-action='deal-save-condition']");
+  if (saveCondBtn) saveCondBtn.addEventListener("click", async () => {
+    document.querySelectorAll("[data-cond-field]").forEach(el => {
+      const field = el.dataset.condField;
+      d[field] = field === "deferredMaint" ? parseFloat(el.value) || 0 : el.value;
+    });
+    await saveDealsToSheet(); saveCondBtn.textContent = "Saved ✓"; setTimeout(() => { saveCondBtn.textContent = "Save Condition"; }, 1500);
+  });
+
+  // Log call overlay
+  const logCallBtn = document.querySelector("[data-action='deal-log-call']");
+  const overlay = document.getElementById("call-log-overlay");
+  const saveCallBtn = document.getElementById("call-log-save");
+  const cancelCallBtn = document.getElementById("call-log-cancel");
+  if (logCallBtn && overlay) {
+    logCallBtn.addEventListener("click", () => { overlay.style.display = "flex"; });
+    cancelCallBtn.addEventListener("click", () => { overlay.style.display = "none"; });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.style.display = "none"; });
+    saveCallBtn.addEventListener("click", async () => {
+      const status = document.getElementById("call-status-input").value;
+      const note = document.getElementById("call-note-input").value.trim();
+      if (!d.callLog) d.callLog = [];
+      d.callLog.push({ time: Date.now(), status, note });
+      d.lastActivity = Date.now();
+      if (status === "Broker Sending Info" || status === "Called — No Answer" || status === "Left Voicemail") { d.brokerReached = status === "Broker Sending Info"; }
+      overlay.style.display = "none";
+      await saveDealsToSheet(); render();
+    });
   }
 
   // View Tenants (sync from UW)
-  if (d.uwLink) {
-    h += `<div class="modal-section"><div style="display:flex;justify-content:space-between;align-items:center"><div class="modal-section-label">Tenants</div><button data-action="modal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">View Tenants</button></div><div id="modal-tenants-container"></div></div>`;
-  }
-
-  h += `</div></div></div>`;
-  return h;
+  const syncBtn = document.querySelector("[data-action='deal-sync-tenants']");
+  if (syncBtn) syncBtn.addEventListener("click", async () => {
+    const uwLink = syncBtn.dataset.uw;
+    const container = document.getElementById("deal-tenants-container");
+    if (!uwLink) return;
+    syncBtn.textContent = "Loading..."; syncBtn.style.pointerEvents = "none";
+    try {
+      const uwMatch = uwLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (!uwMatch) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">Invalid UW link</div>'; return; }
+      const uwSheetId = uwMatch[1];
+      const strip$ = v => parseFloat((v||"").toString().replace(/[$,%]/g,"")) || 0;
+      const mtmEnd = () => { const dt = new Date(); return new Date(dt.getFullYear(), dt.getMonth()+1, 0).toISOString().split("T")[0]; };
+      const rrResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Rent Roll'!A13:P50", {headers:{"Authorization":"Bearer "+state.accessToken}});
+      const rrData = await rrResp.json();
+      let leaseEvents = [];
+      try {
+        const lsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Lease Schedule'!A2:J200", {headers:{"Authorization":"Bearer "+state.accessToken}});
+        const lsData = await lsResp.json();
+        if (lsData.values) leaseEvents = lsData.values.map(row => { const s$=v=>parseFloat((v||"").toString().replace(/[$,%]/g,""))||0; return {tenantName:(row[0]||"").trim(),suite:(row[1]||"").trim(),eventType:(row[2]||"").trim(),startDate:(row[3]||"").toString().split("T")[0].split(" ")[0],endDate:(row[4]||"").toString().split("T")[0].split(" ")[0],monthlyRentSf:s$(row[5]),annualRentSf:s$(row[6]),bumpPct:s$(row[7]),leaseType:(row[8]||"").trim().toLowerCase(),notes:(row[9]||"").trim()}; });
+      } catch(e) {}
+      if (!rrData.values || rrData.values.length < 2) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">No rent roll data found</div>'; return; }
+      const rows = rrData.values; const tenants = [];
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i]; const tenantName = (row[1]||"").trim();
+        if (!tenantName || tenantName === "Total" || tenantName === "Vacant " || tenantName === "Occupied") break;
+        const creditType = (row[0]||"").trim(); const suite = (row[2]||"").trim(); const gla = parseFloat(row[3])||0;
+        const ls = (row[5]||"").toString().split("T")[0].split(" ")[0];
+        const rawEnd = (row[6]||"").toString().trim(); const isMTM = rawEnd.toUpperCase() === "MTM";
+        const le = isMTM ? mtmEnd() : rawEnd.split("T")[0].split(" ")[0];
+        const isVacant = creditType.toLowerCase() === "vacant" || tenantName.toLowerCase() === "vacant";
+        const tenantEvts = leaseEvents.filter(e => e.tenantName === tenantName && e.suite === suite);
+        const lsType = tenantEvts.length && tenantEvts[tenantEvts.length-1].leaseType ? tenantEvts[tenantEvts.length-1].leaseType : "";
+        tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),isVacant,creditType,leaseSchedule:tenantEvts});
+      }
+      state.dealDetailTenants = tenants;
+      container.innerHTML = tenants.length ? renderTenantTimeline(tenants) : '<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';
+      syncBtn.textContent = "Re-sync from UW"; syncBtn.style.pointerEvents = "auto";
+    } catch(e) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>'; syncBtn.textContent = "View Tenants"; syncBtn.style.pointerEvents = "auto"; }
+  });
 }
 
 // ---- EVENT WIRING ----
@@ -1247,8 +1546,8 @@ function wireEvents() {
   // Deal card clicks (kanban)
   document.querySelectorAll(".k-card[data-deal-id]").forEach(card => {
     card.addEventListener("click", (e) => {
-      if (e.target.closest("a")) return; // Don't trigger on link clicks
-      state.selectedDeal = state.deals.find(d => d.id === card.dataset.dealId);
+      if (e.target.closest("a")) return;
+      state.selectedDealDetail = card.dataset.dealId;
       render();
     });
   });
@@ -1257,7 +1556,7 @@ function wireEvents() {
   document.querySelectorAll("tbody tr[data-deal-id]").forEach(row => {
     row.addEventListener("click", (e) => {
       if (e.target.closest("a")) return;
-      state.selectedDeal = state.deals.find(d => d.id === row.dataset.dealId);
+      state.selectedDealDetail = row.dataset.dealId;
       render();
     });
   });
@@ -1272,53 +1571,6 @@ function wireEvents() {
     });
   });
 
-  // Modal close
-  const overlay = document.getElementById("modal-overlay");
-  if (overlay) {
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) { state.selectedDeal = null; render(); }
-    });
-  }
-  const closeBtn = document.getElementById("modal-close");
-  if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
-  // Modal View Tenants sync
-  const syncTenBtn=document.querySelector("[data-action='modal-sync-tenants']");
-  if(syncTenBtn)syncTenBtn.addEventListener("click",async()=>{
-    const uwLink=syncTenBtn.dataset.uw;
-    const container=document.getElementById("modal-tenants-container");
-    if(!container||!uwLink)return;
-    syncTenBtn.textContent="Loading...";syncTenBtn.style.pointerEvents="none";
-    try{
-      const uwMatch=uwLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if(!uwMatch){container.innerHTML='<div style="color:#EF4444;font-size:11px">Invalid UW link</div>';return;}
-      const uwSheetId=uwMatch[1];
-      const strip$=v=>parseFloat((v||"").toString().replace(/[$,%]/g,''))||0;
-      const mtmEnd=()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth()+1,0).toISOString().split("T")[0];};
-      // Read Rent Roll
-      const rrResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Rent Roll'!A13:P50",{headers:{"Authorization":"Bearer "+state.accessToken}});
-      const rrData=await rrResp.json();
-      // Read Lease Schedule
-      let leaseEvents=[];
-      try{const lsResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Lease Schedule'!A2:J200",{headers:{"Authorization":"Bearer "+state.accessToken}});const lsData=await lsResp.json();if(lsData.values)leaseEvents=lsData.values.map(row=>{const s$=v=>parseFloat((v||"").toString().replace(/[$,%]/g,''))||0;return{tenantName:(row[0]||"").trim(),suite:(row[1]||"").trim(),eventType:(row[2]||"").trim(),startDate:(row[3]||"").toString().split("T")[0].split(" ")[0],endDate:(row[4]||"").toString().split("T")[0].split(" ")[0],monthlyRentSf:s$(row[5]),annualRentSf:s$(row[6]),bumpPct:s$(row[7]),leaseType:(row[8]||"").trim().toLowerCase(),notes:(row[9]||"").trim()};});}catch(e){}
-      if(!rrData.values||rrData.values.length<2){container.innerHTML='<div style="color:#EF4444;font-size:11px">No rent roll data found</div>';return;}
-      const rows=rrData.values;const tenants=[];
-      for(let i=1;i<rows.length;i++){
-        const row=rows[i];const tenantName=(row[1]||"").trim();
-        if(!tenantName||tenantName==="Total"||tenantName==="Vacant "||tenantName==="Occupied")break;
-        const creditType=(row[0]||"").trim();const suite=(row[2]||"").trim();const gla=parseFloat(row[3])||0;
-        const ls=(row[5]||"").toString().split("T")[0].split(" ")[0];
-        const rawEnd=(row[6]||"").toString().trim();const isMTM=rawEnd.toUpperCase()==="MTM";
-        const le=isMTM?mtmEnd():rawEnd.split("T")[0].split(" ")[0];
-        const isVacant=creditType.toLowerCase()==="vacant"||tenantName.toLowerCase()==="vacant";
-        const tenantEvts=leaseEvents.filter(e=>e.tenantName===tenantName&&e.suite===suite);
-        const lsType=tenantEvts.length&&tenantEvts[tenantEvts.length-1].leaseType?tenantEvts[tenantEvts.length-1].leaseType:"";
-        tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),isVacant,creditType,leaseSchedule:tenantEvts});
-      }
-      if(tenants.length){container.innerHTML=renderTenantTimeline(tenants);}
-      else{container.innerHTML='<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';}
-      syncTenBtn.textContent="Refresh";syncTenBtn.style.pointerEvents="auto";
-    }catch(e){container.innerHTML='<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>';syncTenBtn.textContent="View Tenants";syncTenBtn.style.pointerEvents="auto";}
-  });
   // KPI period toggle
   document.querySelectorAll("[data-kpi-period]").forEach(btn=>{btn.addEventListener("click",()=>{state.kpiPeriod=btn.dataset.kpiPeriod;render();});});
   // Stage filter
@@ -1418,7 +1670,7 @@ async function saveDDToSheet() {
 }
 async function saveDealsToSheet() {
   if (!state.spreadsheetId) return;
-  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink"];
+  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink","propertyCondition","roofCondition","parkingCondition","hvacNotes","deferredMaint","envConcerns"];
   const values = [headers, ...state.deals.map(d => headers.map(h => {
     const val = d[h]; if (val === undefined || val === null) return ""; if (typeof val === "object") return JSON.stringify(val); return String(val);
   }))];
