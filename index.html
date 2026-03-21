@@ -1230,8 +1230,7 @@ function renderModal(d) {
     [...d.callLog].reverse().forEach(c => {
       const date = c.time ? new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
       const statusColor = c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"?"#EF4444":c.status==="Wrong Number"?"#EF4444":"#64748B";
-      h += `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span style="color:var(--text-muted);margin-right:8px">${date}</span><span style="color:${statusColor};font-weight:600">${esc(c.status||"Called")}</span>${c.notes?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px">${esc(c.notes)}</div>`:''}</div>`;
-    });
+h += `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span style="color:var(--text-muted);margin-right:8px">${date}</span><span style="color:${statusColor};font-weight:600">${esc(c.status||"Called")}</span>${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px">${esc(c.note)}</div>`:''}</div>`;    });
     h += `</div></div>`;
   }
 
