@@ -1185,7 +1185,7 @@ function calcPhysicalScore(d) {
   return Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 }
 function calcCompsScore(d) {
-  const compsCount = (d.callLog || []).filter(c => c.status === "Broker Sending Info").length;
+  const compsCount = state.dealDetailComps.length;
   if (!compsCount) return null;
   if (compsCount === 1) return 4;
   if (compsCount === 2) return 6;
@@ -1262,7 +1262,7 @@ function renderScorecard(d, tenants) {
   const overall = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*10)/10 : null;
   const ovColor = !overall ? "#CBD5E1" : overall >= 8 ? "#10B981" : overall >= 5 ? "#E8A838" : "#EF4444";
   const ovFilled = overall ? (overall/10)*CIRC : 0;
-  return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+  return `<div id="deal-scorecard" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
     <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Scorecard</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${ring(phys,"Physical","No Data")}
@@ -1450,13 +1450,21 @@ function wireDealDetailEvents() {
   const d = state.deals.find(dl => dl.id === state.selectedDealDetail);
   if (!d) return;
 
+  // Snapshot condition fields into d before any render() so unsaved edits survive re-renders
+  function snapshotCondition() {
+    document.querySelectorAll("[data-cond-field]").forEach(el => {
+      const field = el.dataset.condField;
+      d[field] = field === "deferredMaint" ? parseFloat(el.value) || 0 : el.value;
+    });
+  }
+
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
-    btn.addEventListener("click", async () => { d.stage = btn.dataset.value; await saveDealsToSheet(); render(); });
+    btn.addEventListener("click", async () => { snapshotCondition(); d.stage = btn.dataset.value; await saveDealsToSheet(); render(); });
   });
 
   // Remove deal
@@ -1464,17 +1472,14 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = [];
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = [];
     await saveDealsToSheet(); render();
   });
 
   // Save condition
   const saveCondBtn = document.querySelector("[data-action='deal-save-condition']");
   if (saveCondBtn) saveCondBtn.addEventListener("click", async () => {
-    document.querySelectorAll("[data-cond-field]").forEach(el => {
-      const field = el.dataset.condField;
-      d[field] = field === "deferredMaint" ? parseFloat(el.value) || 0 : el.value;
-    });
+    snapshotCondition();
     await saveDealsToSheet(); saveCondBtn.textContent = "Saved ✓"; setTimeout(() => { saveCondBtn.textContent = "Save Condition"; }, 1500);
   });
 
@@ -1495,6 +1500,7 @@ function wireDealDetailEvents() {
       d.lastActivity = Date.now();
       if (status === "Broker Sending Info" || status === "Called — No Answer" || status === "Left Voicemail") { d.brokerReached = status === "Broker Sending Info"; }
       overlay.style.display = "none";
+      snapshotCondition();
       await saveDealsToSheet(); render();
     });
   }
@@ -1535,7 +1541,16 @@ function wireDealDetailEvents() {
         tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),isVacant,creditType,leaseSchedule:tenantEvts});
       }
       state.dealDetailTenants = tenants;
+      // Also fetch Comps tab
+      try {
+        const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Comps'!A2:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
+        const compsData = await compsResp.json();
+        state.dealDetailComps = (compsData.values || []).filter(row => row[0] && row[0].toString().trim());
+      } catch(e) { state.dealDetailComps = []; }
       container.innerHTML = tenants.length ? renderTenantTimeline(tenants) : '<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';
+      // Refresh scorecard with updated tenants + comps
+      const scorecardEl = document.getElementById("deal-scorecard");
+      if (scorecardEl) scorecardEl.outerHTML = renderScorecard(d, tenants);
       syncBtn.textContent = "Re-sync from UW"; syncBtn.style.pointerEvents = "auto";
     } catch(e) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>'; syncBtn.textContent = "View Tenants"; syncBtn.style.pointerEvents = "auto"; }
   });
