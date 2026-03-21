@@ -1220,8 +1220,19 @@ function renderModal(d) {
   }
 
   // Notes
-  if (d.notes) {
+ if (d.notes) {
     h += `<div class="modal-section"><div class="modal-section-label">Notes</div><div class="modal-info">${esc(d.notes)}</div></div>`;
+  }
+
+  // Call Log
+  if (d.callLog && d.callLog.length) {
+    h += `<div class="modal-section"><div class="modal-section-label">Call Log (${d.callLog.length})</div><div style="max-height:160px;overflow-y:auto">`;
+    [...d.callLog].reverse().forEach(c => {
+      const date = c.time ? new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+      const statusColor = c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"?"#EF4444":c.status==="Wrong Number"?"#EF4444":"#64748B";
+      h += `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span style="color:var(--text-muted);margin-right:8px">${date}</span><span style="color:${statusColor};font-weight:600">${esc(c.status||"Called")}</span>${c.notes?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px">${esc(c.notes)}</div>`:''}</div>`;
+    });
+    h += `</div></div>`;
   }
 
   h += `</div></div></div>`;
