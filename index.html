@@ -956,7 +956,6 @@ function render() {
     h += renderStageFilter();
     h += `<div class="main">`;
     if (state.view === "kanban") h += renderKanban();
-    else if (state.view === "map") h += `<div style="border-radius:12px;overflow:hidden;border:1px solid var(--border)"><iframe src="https://www.google.com/maps/d/embed?mid=1acxNqShNiz2IB3wbCLl1NLu88DpkuTs&ehbc=2E312F" width="100%" height="600" style="border:none"></iframe></div>`;
     else h += renderTable();
     h += `</div>`;
     if (state.selectedDeal) h += renderModal(state.selectedDeal);
@@ -994,7 +993,6 @@ function renderHeader() {
     subToggle = `<div class="view-toggle" style="margin-left:12px">
       <button class="view-btn ${state.view==='kanban'?'active':''}" data-view="kanban">Kanban</button>
       <button class="view-btn ${state.view==='table'?'active':''}" data-view="table">Table</button>
-      <button class="view-btn ${state.view==='map'?'active':''}" data-view="map">Map</button>
     </div>`;
   }
   return `<div class="header"><div class="header-inner">
@@ -1220,7 +1218,7 @@ function renderModal(d) {
   }
 
   // Notes
- if (d.notes) {
+  if (d.notes) {
     h += `<div class="modal-section"><div class="modal-section-label">Notes</div><div class="modal-info">${esc(d.notes)}</div></div>`;
   }
 
@@ -1230,8 +1228,14 @@ function renderModal(d) {
     [...d.callLog].reverse().forEach(c => {
       const date = c.time ? new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
       const statusColor = c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"?"#EF4444":c.status==="Wrong Number"?"#EF4444":"#64748B";
-h += `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span style="color:var(--text-muted);margin-right:8px">${date}</span><span style="color:${statusColor};font-weight:600">${esc(c.status||"Called")}</span>${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px">${esc(c.note)}</div>`:''}</div>`;    });
+      h += `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px"><span style="color:var(--text-muted);margin-right:8px">${date}</span><span style="color:${statusColor};font-weight:600">${esc(c.status||"Called")}</span>${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px">${esc(c.note)}</div>`:''}</div>`;
+    });
     h += `</div></div>`;
+  }
+
+  // View Tenants (sync from UW)
+  if (d.uwLink) {
+    h += `<div class="modal-section"><div style="display:flex;justify-content:space-between;align-items:center"><div class="modal-section-label">Tenants</div><button data-action="modal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">View Tenants</button></div><div id="modal-tenants-container"></div></div>`;
   }
 
   h += `</div></div></div>`;
@@ -1277,6 +1281,44 @@ function wireEvents() {
   }
   const closeBtn = document.getElementById("modal-close");
   if (closeBtn) closeBtn.addEventListener("click", () => { state.selectedDeal = null; render(); });
+  // Modal View Tenants sync
+  const syncTenBtn=document.querySelector("[data-action='modal-sync-tenants']");
+  if(syncTenBtn)syncTenBtn.addEventListener("click",async()=>{
+    const uwLink=syncTenBtn.dataset.uw;
+    const container=document.getElementById("modal-tenants-container");
+    if(!container||!uwLink)return;
+    syncTenBtn.textContent="Loading...";syncTenBtn.style.pointerEvents="none";
+    try{
+      const uwMatch=uwLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if(!uwMatch){container.innerHTML='<div style="color:#EF4444;font-size:11px">Invalid UW link</div>';return;}
+      const uwSheetId=uwMatch[1];
+      const strip$=v=>parseFloat((v||"").toString().replace(/[$,%]/g,''))||0;
+      const mtmEnd=()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth()+1,0).toISOString().split("T")[0];};
+      // Read Rent Roll
+      const rrResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Rent Roll'!A13:P50",{headers:{"Authorization":"Bearer "+state.accessToken}});
+      const rrData=await rrResp.json();
+      // Read Lease Schedule
+      let leaseEvents=[];
+      try{const lsResp=await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Lease Schedule'!A2:J200",{headers:{"Authorization":"Bearer "+state.accessToken}});const lsData=await lsResp.json();if(lsData.values)leaseEvents=lsData.values.map(row=>{const s$=v=>parseFloat((v||"").toString().replace(/[$,%]/g,''))||0;return{tenantName:(row[0]||"").trim(),suite:(row[1]||"").trim(),eventType:(row[2]||"").trim(),startDate:(row[3]||"").toString().split("T")[0].split(" ")[0],endDate:(row[4]||"").toString().split("T")[0].split(" ")[0],monthlyRentSf:s$(row[5]),annualRentSf:s$(row[6]),bumpPct:s$(row[7]),leaseType:(row[8]||"").trim().toLowerCase(),notes:(row[9]||"").trim()};});}catch(e){}
+      if(!rrData.values||rrData.values.length<2){container.innerHTML='<div style="color:#EF4444;font-size:11px">No rent roll data found</div>';return;}
+      const rows=rrData.values;const tenants=[];
+      for(let i=1;i<rows.length;i++){
+        const row=rows[i];const tenantName=(row[1]||"").trim();
+        if(!tenantName||tenantName==="Total"||tenantName==="Vacant "||tenantName==="Occupied")break;
+        const creditType=(row[0]||"").trim();const suite=(row[2]||"").trim();const gla=parseFloat(row[3])||0;
+        const ls=(row[5]||"").toString().split("T")[0].split(" ")[0];
+        const rawEnd=(row[6]||"").toString().trim();const isMTM=rawEnd.toUpperCase()==="MTM";
+        const le=isMTM?mtmEnd():rawEnd.split("T")[0].split(" ")[0];
+        const isVacant=creditType.toLowerCase()==="vacant"||tenantName.toLowerCase()==="vacant";
+        const tenantEvts=leaseEvents.filter(e=>e.tenantName===tenantName&&e.suite===suite);
+        const lsType=tenantEvts.length&&tenantEvts[tenantEvts.length-1].leaseType?tenantEvts[tenantEvts.length-1].leaseType:"";
+        tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),isVacant,creditType,leaseSchedule:tenantEvts});
+      }
+      if(tenants.length){container.innerHTML=renderTenantTimeline(tenants);}
+      else{container.innerHTML='<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';}
+      syncTenBtn.textContent="Refresh";syncTenBtn.style.pointerEvents="auto";
+    }catch(e){container.innerHTML='<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>';syncTenBtn.textContent="View Tenants";syncTenBtn.style.pointerEvents="auto";}
+  });
   // KPI period toggle
   document.querySelectorAll("[data-kpi-period]").forEach(btn=>{btn.addEventListener("click",()=>{state.kpiPeriod=btn.dataset.kpiPeriod;render();});});
   // Stage filter
@@ -1713,7 +1755,7 @@ function wireDDEvents(){
         const tenantEvts=leaseEvents.filter(e=>e.tenantName===tenantName&&e.suite===suite);
         const strip$=v=>(typeof v==='string'?parseFloat(v.replace(/[$,%]/g,''))||0:parseFloat(v)||0);
         tenants.push({id:existing?existing.id:Math.random().toString(36).slice(2,10),name:tenantName,suite,sqft:gla,
-          leaseType:isVacant?"vacant":(tenantEvts.length&&tenantEvts[tenantEvts.length-1].leaseType?tenantEvts[tenantEvts.length-1].leaseType:(lt.includes("nnn")?"nnn":lt.includes("gross")?"gross":lt)),
+          leaseType:isVacant?"vacant":(lt.includes("nnn")?"nnn":lt.includes("gross")?"gross":lt),
           leaseStart:ls,leaseEnd:le==="MTM"?"MTM":le,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),
           annualRecovery:strip$(row[10]),recoveryPerSf:strip$(row[12]),totalRevenue:strip$(row[13]),
           isVacant,creditType:existing?existing.creditType:"",contactName:existing?existing.contactName:"",
