@@ -1516,6 +1516,22 @@ function renderDealSummary(d, tenants) {
       parts.push("Property is fully occupied — pro forma upside driven by rent growth and lease renewals.");
     }
     if (!proFormaCap && state.dealDetailSynced) { parts.push("Pro forma NOI not yet populated in UW."); improvements.push("Complete the Expenses tab in UW to generate a pro forma cap rate."); }
+
+    // Missing expense red flags
+    if (state.expenseRows) {
+      const e = state.expenseRows;
+      const flags = [];
+      if (!parseFloat(e.landscape))       flags.push("landscaping");
+      if (!parseFloat(e.utilities))       flags.push("utilities/water");
+      if (!parseFloat(e.repairsMaint))    flags.push("repairs & maintenance");
+      if (!parseFloat(e.insurance))       flags.push("insurance");
+      if (!parseFloat(e.propertyTax))     flags.push("property tax");
+      if (flags.length) {
+        parts.push(`<span style="color:#FF9F0A">⚠ Missing expenses: <strong>${flags.join(", ")}</strong> — verify if tenant-responsible or not yet entered.</span>`);
+        improvements.push(`Enter ${flags.join(", ")} in the Expenses section under Deal Data to complete the pro forma.`);
+      }
+    }
+
     if (parts.length) paragraphs.push({ label: "Financial", score: fin, text: parts.join(" ") });
   }
 
@@ -2349,7 +2365,6 @@ function renderExpensesInput(d) {
       <th style="${thS}">Line Item</th>
       <th style="${thS};text-align:right">Current ($)</th>
       <th style="${thS};text-align:right">Pro Forma (Yr 4)</th>
-      <th style="${thS};text-align:right;width:80px">UW Cell</th>
     </tr></thead><tbody>`;
 
   const rows = [
@@ -2367,7 +2382,6 @@ function renderExpensesInput(d) {
       <td style="${labelS}">${label}</td>
       <td style="${tdS}">${inp(field, cur)}</td>
       <td style="${tdS}">${pfCell(pfVal, "exp-pf-"+field)}</td>
-      <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">${cell}</td>
     </tr>`;
   });
 
@@ -2380,7 +2394,6 @@ function renderExpensesInput(d) {
     </td>
     <td style="${tdS}">${inp("mgmtFee", mgmtVal, mgmtSuggestion.value||"0")}</td>
     <td style="${tdS}">${pfCell(pfMgmt, "exp-pf-mgmtFee")}</td>
-    <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">C24</td>
   </tr>`;
 
   // Property Tax
@@ -2392,7 +2405,6 @@ function renderExpensesInput(d) {
     </td>
     <td style="${tdS}">${inp("propertyTax", e.propertyTax)}</td>
     <td style="${tdS}">${pfCell(pfTax, "exp-pf-propertyTax")}</td>
-    <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">B26/E26</td>
   </tr>`;
 
   // Insurance
@@ -2403,7 +2415,6 @@ function renderExpensesInput(d) {
     </td>
     <td style="${tdS}">${inp("insurance", e.insurance)}</td>
     <td style="${tdS}">${pfCell(pfIns, "exp-pf-insurance")}</td>
-    <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">B27/E27</td>
   </tr>`;
 
   // Totals
@@ -2411,7 +2422,6 @@ function renderExpensesInput(d) {
     <td style="padding:8px 10px;font-weight:600;color:var(--text)">Total Expenses</td>
     <td style="padding:8px 6px"><div id="exp-total-current" style="${calcStyle};font-weight:600;color:var(--text)">${totalCurrent>0?"$"+Math.round(totalCurrent).toLocaleString():"—"}</div></td>
     <td style="padding:8px 6px"><div id="exp-total-pf" style="${calcStyle};font-weight:600;color:var(--text)">${totalPF>0?"$"+Math.round(totalPF).toLocaleString():"—"}</div></td>
-    <td style="padding:8px 10px;font-size:10px;color:var(--text-muted);font-family:monospace;text-align:right">B28/E28</td>
   </tr>`;
 
   h += `</tbody></table>`;
