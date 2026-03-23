@@ -3,42 +3,49 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TaskFlow Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@600;700;800;900&display=swap" rel="stylesheet">
+<title>CREFlow</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root {
-  --bg: #F8FAFC;
+  --bg: #F5F5F7;
   --bg-card: #FFFFFF;
-  --bg-dark: #0F172A;
-  --bg-header: #FFFFFF;
-  --text: #1E293B;
-  --text-secondary: #64748B;
-  --text-muted: #94A3B8;
-  --border: #E2E8F0;
-  --border-light: #F1F5F9;
-  --accent: #1E293B;
+  --bg-dark: #1D1D1F;
+  --bg-header: rgba(255,255,255,0.85);
+  --text: #1D1D1F;
+  --text-secondary: #6E6E73;
+  --text-muted: #AEAEB2;
+  --border: rgba(0,0,0,0.08);
+  --border-light: rgba(0,0,0,0.04);
+  --accent: #1D1D1F;
+  --accent-blue: #0071E3;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-lg: 0 16px 48px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06);
 
-  --prospecting: #6366F1;
-  --underwriting: #E8A838;
-  --loi: #3B82F6;
-  --loi-accepted: #0EA5E9;
-  --psa: #8B5CF6;
-  --closed: #10B981;
-  --dead: #94A3B8;
+  --prospecting: #5E5CE6;
+  --underwriting: #FF9F0A;
+  --loi: #0071E3;
+  --loi-accepted: #32ADE6;
+  --psa: #BF5AF2;
+  --closed: #34C759;
+  --dead: #AEAEB2;
 
-  --pri-high: #EF4444;
-  --pri-med: #E8A838;
-  --pri-low: #6B7280;
+  --pri-high: #FF3B30;
+  --pri-med: #FF9F0A;
+  --pri-low: #AEAEB2;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-font-smoothing: antialiased; }
 
 body {
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  letter-spacing: -0.01em;
 }
 
 /* ---- LOGIN ---- */
@@ -48,37 +55,41 @@ body {
   align-items: center;
   justify-content: center;
   height: 100vh;
-  gap: 16px;
+  gap: 20px;
+  background: var(--bg);
 }
 .login-container h1 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 42px;
-  font-weight: 900;
+  font-size: 48px;
+  font-weight: 700;
   color: var(--bg-dark);
-  letter-spacing: -1.5px;
+  letter-spacing: -2px;
+  line-height: 1;
 }
-.login-container p { color: var(--text-muted); font-size: 15px; }
+.login-container p { color: var(--text-secondary); font-size: 17px; font-weight: 400; }
 .login-btn {
-  margin-top: 12px;
-  padding: 14px 32px;
+  margin-top: 8px;
+  padding: 14px 36px;
   background: var(--bg-dark);
   color: #fff;
   border: none;
-  border-radius: 12px;
+  border-radius: 980px;
   font-size: 15px;
-  font-weight: 700;
-  font-family: 'DM Sans', sans-serif;
+  font-weight: 500;
+  font-family: 'Inter', sans-serif;
   cursor: pointer;
   transition: all 0.2s;
+  letter-spacing: -0.01em;
 }
-.login-btn:hover { background: #1a2540; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
-.login-note { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+.login-btn:hover { background: #2D2D2F; transform: scale(1.01); box-shadow: var(--shadow-md); }
+.login-note { font-size: 12px; color: var(--text-muted); }
 
 /* ---- HEADER ---- */
 .header {
   background: var(--bg-header);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid var(--border);
-  padding: 0 32px;
+  padding: 0 40px;
   position: sticky;
   top: 0;
   z-index: 100;
@@ -89,112 +100,119 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 64px;
+  height: 52px;
 }
-.header-left { display: flex; align-items: center; gap: 24px; }
+.header-left { display: flex; align-items: center; gap: 28px; }
 .header h1 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 18px;
+  font-weight: 600;
   color: var(--bg-dark);
-  letter-spacing: -0.8px;
+  letter-spacing: -0.5px;
 }
-.header-right { display: flex; align-items: center; gap: 12px; }
+.header-right { display: flex; align-items: center; gap: 10px; }
 
 /* ---- VIEW TOGGLE ---- */
 .view-toggle {
   display: flex;
-  background: var(--border-light);
+  background: rgba(0,0,0,0.05);
   border-radius: 8px;
-  padding: 3px;
+  padding: 2px;
+  gap: 1px;
 }
 .view-btn {
-  padding: 7px 16px;
+  padding: 5px 14px;
   font-size: 12px;
-  font-weight: 600;
-  font-family: 'DM Sans', sans-serif;
-  color: var(--text-muted);
+  font-weight: 500;
+  font-family: 'Inter', sans-serif;
+  color: var(--text-secondary);
   background: transparent;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
+  letter-spacing: -0.01em;
 }
 .view-btn.active {
   background: #fff;
   color: var(--text);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  box-shadow: var(--shadow-sm);
 }
+.view-btn:hover:not(.active) { color: var(--text); }
 
 /* ---- SEARCH ---- */
 .search-input {
-  padding: 8px 14px;
+  padding: 7px 14px 7px 32px;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'Inter', sans-serif;
   color: var(--text);
-  width: 240px;
+  width: 220px;
   outline: none;
-  transition: border-color 0.15s;
+  background: rgba(255,255,255,0.8);
+  transition: all 0.15s;
+  letter-spacing: -0.01em;
 }
-.search-input:focus { border-color: var(--text-muted); }
-.search-input::placeholder { color: #CBD5E1; }
+.search-input:focus { background: #fff; border-color: rgba(0,0,0,0.15); box-shadow: var(--shadow-sm); }
+.search-input::placeholder { color: var(--text-muted); }
 
 /* ---- STATS BAR ---- */
 .stats-bar {
   max-width: 1440px;
-  margin: 20px auto 0;
-  padding: 0 32px;
+  margin: 24px auto 0;
+  padding: 0 40px;
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .stat-card {
   background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
-  padding: 14px 18px;
+  border: none;
+  border-radius: var(--radius);
+  padding: 16px 20px;
   flex: 1;
-  min-width: 140px;
+  min-width: 130px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s;
 }
+.stat-card:hover { box-shadow: var(--shadow-md); }
 .stat-label {
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 4px;
+  letter-spacing: 0;
+  margin-bottom: 6px;
 }
 .stat-value {
-  font-size: 22px;
-  font-weight: 800;
-  font-family: 'Outfit', sans-serif;
+  font-size: 24px;
+  font-weight: 700;
   color: var(--bg-dark);
+  letter-spacing: -1px;
+  line-height: 1;
 }
-.stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; font-weight: 400; }
 
 /* ---- MAIN CONTENT ---- */
 .main {
   max-width: 1440px;
-  margin: 20px auto 40px;
-  padding: 0 32px;
+  margin: 20px auto 60px;
+  padding: 0 40px;
 }
 
 /* ---- KANBAN ---- */
 .kanban {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   overflow-x: auto;
-  padding-bottom: 20px;
+  padding-bottom: 24px;
 }
-.kanban::-webkit-scrollbar { height: 6px; }
+.kanban::-webkit-scrollbar { height: 4px; }
 .kanban::-webkit-scrollbar-track { background: transparent; }
-.kanban::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.kanban::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 2px; }
 
 .kanban-col {
-  min-width: 260px;
-  max-width: 300px;
+  min-width: 256px;
+  max-width: 290px;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -203,117 +221,113 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  margin-bottom: 8px;
-  border-radius: 8px;
+  padding: 8px 4px;
+  margin-bottom: 10px;
 }
 .kanban-col-title {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
 }
 .kanban-col-count {
   font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.3);
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: rgba(0,0,0,0.06);
+  color: var(--text-secondary);
 }
 .kanban-cards { display: flex; flex-direction: column; gap: 8px; flex: 1; }
 
 .k-card {
   background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
-  padding: 14px;
+  border: none;
+  border-radius: var(--radius);
+  padding: 16px;
   cursor: pointer;
-  transition: all 0.15s;
-  position: relative;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
 }
-.k-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); transform: translateY(-1px); }
+.k-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
 .k-card-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  margin-bottom: 3px;
-  line-height: 1.3;
+  margin-bottom: 2px;
+  line-height: 1.35;
+  letter-spacing: -0.2px;
 }
 .k-card-address {
   font-size: 11px;
   color: var(--text-muted);
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  font-weight: 400;
 }
 .k-card-metrics {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .k-metric {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-secondary);
 }
-.k-metric strong { color: var(--text); }
+.k-metric strong { color: var(--text); font-weight: 600; }
 .k-card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-light);
 }
 .k-priority {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  letter-spacing: 0;
 }
 .k-score {
   font-size: 11px;
-  font-weight: 800;
-  padding: 2px 7px;
-  border-radius: 5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
 }
-.k-links { display: flex; gap: 4px; margin-top: 6px; }
+.k-links { display: flex; gap: 4px; margin-top: 8px; }
 .k-link-pill {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 3px 7px;
-  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 20px;
   text-decoration: none;
   transition: opacity 0.15s;
 }
-.k-link-pill:hover { opacity: 0.8; }
+.k-link-pill:hover { opacity: 0.75; }
 
 /* ---- TABLE ---- */
 .table-container {
   background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
+  border: none;
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
-.table-wrap {
-  overflow-x: auto;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
 thead th {
   position: sticky;
   top: 0;
-  background: var(--border-light);
-  padding: 10px 14px;
+  background: rgba(245,245,247,0.9);
+  backdrop-filter: blur(8px);
+  padding: 11px 16px;
   text-align: left;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
@@ -321,53 +335,46 @@ thead th {
 }
 thead th:hover { color: var(--text); }
 thead th .sort-arrow { font-size: 9px; margin-left: 4px; }
-tbody tr {
-  border-bottom: 1px solid var(--border-light);
-  transition: background 0.1s;
-}
-tbody tr:hover { background: #FAFBFC; }
-tbody td {
-  padding: 10px 14px;
-  white-space: nowrap;
-  color: var(--text);
-}
-.td-name { font-weight: 600; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-.td-address { color: var(--text-secondary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+tbody tr { border-bottom: 1px solid var(--border-light); transition: background 0.1s; }
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: rgba(0,0,0,0.015); }
+tbody td { padding: 11px 16px; white-space: nowrap; color: var(--text); font-weight: 400; }
+.td-name { font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.td-address { color: var(--text-secondary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
 .stage-badge {
   display: inline-block;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 3px 8px;
-  border-radius: 5px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  border-radius: 20px;
+  letter-spacing: 0;
 }
 .pri-badge {
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
 }
 .td-link {
-  color: #3B82F6;
+  color: var(--accent-blue);
   text-decoration: none;
   font-weight: 500;
   font-size: 11px;
 }
 .td-link:hover { text-decoration: underline; }
 .td-score {
-  font-weight: 800;
-  padding: 2px 7px;
-  border-radius: 5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
   font-size: 11px;
 }
 
-/* ---- DETAIL MODAL ---- */
+/* ---- MODAL (legacy, kept for safety) ---- */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15,23,42,0.4);
-  backdrop-filter: blur(4px);
+  background: rgba(0,0,0,0.3);
+  backdrop-filter: blur(8px);
   z-index: 200;
   display: flex;
   align-items: center;
@@ -376,114 +383,61 @@ tbody td {
 }
 .modal {
   background: var(--bg-card);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   width: 560px;
   max-height: 80vh;
   overflow-y: auto;
-  box-shadow: 0 24px 48px rgba(0,0,0,0.15);
+  box-shadow: var(--shadow-lg);
   animation: slideUp 0.2s ease;
 }
 .modal-header {
-  padding: 20px 24px;
+  padding: 24px 28px 20px;
   border-bottom: 1px solid var(--border-light);
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
 }
-.modal-header h2 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 18px;
-  font-weight: 800;
-  color: var(--bg-dark);
-}
-.modal-close {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 4px 8px;
-}
-.modal-body { padding: 20px 24px; }
-.modal-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.modal-metric {
-  background: var(--border-light);
-  border-radius: 8px;
-  padding: 10px 12px;
-  text-align: center;
-}
-.modal-metric-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 3px;
-  font-weight: 600;
-}
-.modal-metric-value {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-}
-.modal-section {
-  margin-bottom: 14px;
-}
-.modal-section-label {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 6px;
-}
-.modal-info {
-  background: var(--border-light);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-.modal-links {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.modal-link-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 6px;
-  text-decoration: none;
-  transition: opacity 0.15s;
-}
-.modal-link-pill:hover { opacity: 0.8; }
+.modal-header h2 { font-size: 20px; font-weight: 700; color: var(--bg-dark); letter-spacing: -0.5px; }
+.modal-close { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+.modal-body { padding: 20px 28px; }
+.modal-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.modal-metric { background: var(--bg); border-radius: var(--radius); padding: 12px; text-align: center; }
+.modal-metric-label { font-size: 10px; color: var(--text-muted); letter-spacing: 0; margin-bottom: 4px; font-weight: 500; }
+.modal-metric-value { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
+.modal-section { margin-bottom: 16px; }
+.modal-section-label { font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 0; margin-bottom: 6px; text-transform: uppercase; }
+.modal-info { background: var(--bg); border-radius: var(--radius); padding: 12px 14px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.modal-links { display: flex; gap: 8px; flex-wrap: wrap; }
+.modal-link-pill { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; font-size: 11px; font-weight: 500; border-radius: 20px; text-decoration: none; transition: opacity 0.15s; }
+.modal-link-pill:hover { opacity: 0.75; }
 
-/* ---- EMPTY STATE ---- */
-.empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
-.empty h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: var(--text-secondary); }
-.empty p { font-size: 13px; }
-
-/* ---- LOADING ---- */
-.loading { text-align: center; padding: 60px; color: var(--text-muted); font-size: 14px; }
+/* ---- EMPTY / LOADING ---- */
+.empty { text-align: center; padding: 80px 20px; color: var(--text-muted); }
+.empty h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); letter-spacing: -0.3px; }
+.empty p { font-size: 14px; font-weight: 400; }
+.loading { text-align: center; padding: 80px; color: var(--text-muted); font-size: 14px; }
 
 /* ---- ANIMATIONS ---- */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ---- STAGE FILTER ---- */
+.stage-filter {
+  max-width: 1440px;
+  margin: 16px auto 0;
+  padding: 0 40px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 
 /* ---- RESPONSIVE ---- */
 @media (max-width: 768px) {
   .stats-bar { flex-direction: column; }
   .kanban-col { min-width: 240px; }
-  .header-inner { padding: 0; }
+  .header { padding: 0 20px; }
+  .main { padding: 0 20px; }
+  .stats-bar { padding: 0 20px; }
   .search-input { width: 160px; }
 }
 </style>
@@ -681,7 +635,7 @@ function renderAcqKPIs() {
     return (now - la) > 7 * DAY;
   });
 
-  let h = `<div style="max-width:1440px;margin:16px auto 0;padding:0 32px">`;
+  let h = `<div style="max-width:1440px;margin:16px auto 0;padding:0 40px">`;
 
   // ---- Pipeline Summary ----
   h += `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px">`;
@@ -716,7 +670,7 @@ function renderAcqKPIs() {
       </div>`;
     }
     h += `<div style="text-align:center">
-      <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${stage.color}">${stage.count}</div>
+      <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${stage.color}">${stage.count}</div>
       <div style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">${stage.label}</div>
     </div>`;
   });
@@ -732,7 +686,7 @@ function renderAcqKPIs() {
     ["LOI", velLOI, "#3B82F6"],
   ].forEach(([label, val, color]) => {
     h += `<div style="text-align:center;background:var(--border-light);border-radius:8px;padding:10px 8px">
-      <div style="font-size:16px;font-weight:800;font-family:'Outfit',sans-serif;color:${color}">${val !== null ? val + "d" : "—"}</div>
+      <div style="font-size:16px;font-weight:800;font-family:'Inter',sans-serif;color:${color}">${val !== null ? val + "d" : "—"}</div>
       <div style="font-size:9px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-top:2px">${label}</div>
     </div>`;
   });
@@ -747,7 +701,7 @@ function renderAcqKPIs() {
   h += `<div style="background:var(--bg-card);border:1px solid ${flaggedDeals.length ? '#FECACA' : 'var(--border-light)'};border-radius:10px;padding:16px 18px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="stat-label" style="color:${flaggedDeals.length ? '#DC2626' : 'var(--text-muted)'}">Deal Health Flags</div>
-      <span style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${flaggedDeals.length ? '#DC2626' : '#10B981'}">${flaggedDeals.length}</span>
+      <span style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${flaggedDeals.length ? '#DC2626' : '#10B981'}">${flaggedDeals.length}</span>
     </div>`;
 
   if (flaggedDeals.length) {
@@ -777,7 +731,7 @@ function renderAcqKPIs() {
   h += `<div style="background:var(--bg-card);border:1px solid ${staleDeals.length ? '#FDE68A' : 'var(--border-light)'};border-radius:10px;padding:16px 18px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="stat-label" style="color:${staleDeals.length ? '#D97706' : 'var(--text-muted)'}">Stale Deals (7+ days no activity)</div>
-      <span style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${staleDeals.length ? '#D97706' : '#10B981'}">${staleDeals.length}</span>
+      <span style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${staleDeals.length ? '#D97706' : '#10B981'}">${staleDeals.length}</span>
     </div>`;
 
   if (staleDeals.length) {
@@ -948,11 +902,11 @@ function filteredDeals() {
 
 function renderStageFilter() {
   const stages = [{id:"all",label:"All Active"}, ...STAGES, {id:"watchlist",label:"★ Watch List",color:"#F59E0B"}];
-  let h = `<div style="display:flex;gap:6px;padding:0 32px;margin-bottom:12px;flex-wrap:wrap">`;
+  let h = `<div class="stage-filter">`;
   stages.forEach(s => {
     const isActive = state.stageFilter === s.id;
-    const color = s.color || "#64748B";
-    h += `<button data-stage-filter="${s.id}" style="padding:5px 12px;border:1px solid ${isActive?color:'var(--border)'};border-radius:8px;font-size:11px;cursor:pointer;background:${isActive?color+'15':'transparent'};color:${isActive?color:'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${s.label}</button>`;
+    const color = s.color || "#6E6E73";
+    h += `<button data-stage-filter="${s.id}" style="padding:5px 14px;border:none;border-radius:20px;font-size:12px;cursor:pointer;background:${isActive?color:'rgba(0,0,0,0.05)'};color:${isActive?'#fff':'var(--text-secondary)'};font-weight:${isActive?'600':'500'};font-family:'Inter',sans-serif;transition:all 0.15s;letter-spacing:-0.01em">${s.label}</button>`;
   });
   h += `</div>`;
   return h;
@@ -1398,7 +1352,7 @@ function renderScorecard(d, tenants) {
         <circle cx="35" cy="35" r="28" fill="none" stroke="${color}" stroke-width="5"
           stroke-dasharray="${filled.toFixed(1)} ${rem.toFixed(1)}" stroke-dashoffset="44" stroke-linecap="round"
           transform="rotate(-90 35 35)"/>
-        <text x="35" y="39" text-anchor="middle" font-size="15" font-weight="800" fill="${color}" font-family="Outfit,sans-serif">${display}</text>
+        <text x="35" y="39" text-anchor="middle" font-size="15" font-weight="800" fill="${color}" font-family="Inter,sans-serif">${display}</text>
       </svg>
       <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-top:2px">${label}</div>
       ${!hasData ? `<div style="font-size:9px;color:var(--text-muted)">${noDataLabel}</div>` : ""}
@@ -1419,7 +1373,7 @@ function renderScorecard(d, tenants) {
           <circle cx="35" cy="35" r="28" fill="none" stroke="${color}" stroke-width="5"
             stroke-dasharray="${filled.toFixed(1)} ${rem.toFixed(1)}" stroke-dashoffset="44" stroke-linecap="round"
             transform="rotate(-90 35 35)"/>
-          <text x="35" y="37" text-anchor="middle" font-size="12" font-weight="800" fill="${color}" font-family="Outfit,sans-serif">${count}/3</text>
+          <text x="35" y="37" text-anchor="middle" font-size="12" font-weight="800" fill="${color}" font-family="Inter,sans-serif">${count}/3</text>
         </svg>
         <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-top:2px">${label}</div>
         <div style="font-size:9px;color:var(--text-muted)">Need ${3 - count} more</div>
@@ -1439,7 +1393,7 @@ function renderScorecard(d, tenants) {
   const ovColor = !overall ? "#CBD5E1" : overall >= 8 ? "#10B981" : overall >= 5 ? "#E8A838" : "#EF4444";
   const ovFilled = overall ? (overall/10)*CIRC : 0;
   return `<div id="deal-scorecard" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Scorecard</div>
+    <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Scorecard</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${ring(phys,"Physical","No Data")}
       ${compsRing(comps,"Comps")}
@@ -1453,7 +1407,7 @@ function renderScorecard(d, tenants) {
           <circle cx="40" cy="40" r="32" fill="none" stroke="${ovColor}" stroke-width="6"
             stroke-dasharray="${ovFilled.toFixed(1)} ${(CIRC-ovFilled).toFixed(1)}" stroke-dashoffset="50" stroke-linecap="round"
             transform="rotate(-90 40 40)"/>
-          <text x="40" y="45" text-anchor="middle" font-size="18" font-weight="800" fill="${ovColor}" font-family="Outfit,sans-serif">${overall ?? "–"}</text>
+          <text x="40" y="45" text-anchor="middle" font-size="18" font-weight="800" fill="${ovColor}" font-family="Inter,sans-serif">${overall ?? "–"}</text>
         </svg>
         <div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-top:2px">Overall</div>
       </div>
@@ -1619,7 +1573,7 @@ function renderDealSummary(d, tenants) {
   function sColor(s) { return s === null ? "#94A3B8" : s >= 8 ? "#10B981" : s >= 5 ? "#E8A838" : "#EF4444"; }
 
   let h = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Summary</div>`;
+    <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Summary</div>`;
 
   paragraphs.forEach(p => {
     const sc = p.score !== null && p.score !== undefined;
@@ -1659,7 +1613,7 @@ function renderHowToCounter(d) {
 
   if (!noi || !rate || !amortYears || !downPct) {
     return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">How to Counter</div>
+      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">How to Counter</div>
       <div style="font-size:12px;color:var(--text-muted)">Sync UW to calculate — needs pro forma NOI, rate, amortization and down payment.</div>
     </div>`;
   }
@@ -1697,24 +1651,24 @@ function renderHowToCounter(d) {
   const gapPct = askingPrice > 0 ? (gap / askingPrice * 100) : 0;
 
   return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">How to Counter</div>
+    <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">How to Counter</div>
     <div style="font-size:11px;color:var(--text-muted);margin-bottom:16px">Based on ${rate}% rate · ${amortYears}yr amort · ${downPct}% down · Pro Forma NOI ${fmt$(noi)}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px">
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
         <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Target Price (100% CoC)</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:#10B981">${fmt$(target100)}</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:#10B981">${fmt$(target100)}</div>
       </div>
       ${targetPsf ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
         <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Target Price/SF</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:#10B981">$${Math.round(targetPsf)}/SF</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:#10B981">$${Math.round(targetPsf)}/SF</div>
       </div>` : ""}
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
         <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">CoC @ Asking</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${askingCocColor}">${askingCoc.toFixed(1)}%</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${askingCocColor}">${askingCoc.toFixed(1)}%</div>
       </div>
       ${askingPrice > 0 ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
         <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Gap to Target</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${gap > 0 ? "#EF4444" : "#10B981"}">${gap > 0 ? "-" : "+"}${fmt$(Math.abs(gap))}</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${gap > 0 ? "#EF4444" : "#10B981"}">${gap > 0 ? "-" : "+"}${fmt$(Math.abs(gap))}</div>
         <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${Math.abs(gapPct).toFixed(1)}% ${gap > 0 ? "above" : "below"} target</div>
       </div>` : ""}
     </div>
@@ -1741,9 +1695,9 @@ function renderDealDetail(d) {
 
   // Header bar
   h += `<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
-    <button data-action="deal-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'DM Sans',sans-serif">← Back</button>
+    <button data-action="deal-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'Inter',sans-serif">← Back</button>
     <div style="flex:1">
-      <div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(d.name)}</div>
+      <div style="font-family:'Inter',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(d.name)}</div>
       <div style="font-size:12px;color:var(--text-muted)">${esc(d.address)}</div>
     </div>
     <span class="stage-badge" style="color:${s.color};background:${s.color}15;font-size:11px;padding:4px 12px">${s.label}</span>
@@ -1785,7 +1739,7 @@ function renderDealDetail(d) {
   // Broker section
   if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
     h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Broker</div>
+      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Broker</div>
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
         <div>
           ${d.broker?`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(d.broker)}</div>`:""}
@@ -1804,8 +1758,8 @@ function renderDealDetail(d) {
   // Call Log
   h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Call Log${d.callLog&&d.callLog.length?" ("+d.callLog.length+")":""}</div>
-      <button data-action="deal-log-call" style="padding:6px 14px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">+ Log Call</button>
+      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Call Log${d.callLog&&d.callLog.length?" ("+d.callLog.length+")":""}</div>
+      <button data-action="deal-log-call" style="padding:6px 14px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">+ Log Call</button>
     </div>`;
   if(d.callLog&&d.callLog.length){
     h+=`<div style="max-height:240px;overflow-y:auto">`;
@@ -1826,18 +1780,18 @@ function renderDealDetail(d) {
 
   // Property Condition
   h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Property Condition</div>
+    <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Property Condition</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">`;
   [["propertyCondition","Overall","select"],["roofCondition","Roof","select"],["parkingCondition","Parking","select"],["hvacCondition","HVAC","select"],
    ["deferredMaint","Deferred Maint ($)","number"],["envConcerns","Environmental Concerns","text"]
   ].forEach(([field,label,type])=>{
     h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">${label}</div>`;
     if(type==="select"){
-      h+=`<select data-cond-field="${field}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif">`;
+      h+=`<select data-cond-field="${field}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">`;
       condOpts.forEach(o=>{h+=`<option value="${o}" ${(d[field]||"").toLowerCase()===o.toLowerCase()?"selected":""}>${o||"— Select —"}</option>`;});
       h+=`</select>`;
     } else {
-      h+=`<input type="${type}" data-cond-field="${field}" value="${esc(String(d[field]||""))}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif">`;
+      h+=`<input type="${type}" data-cond-field="${field}" value="${esc(String(d[field]||""))}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">`;
     }
     h+=`</div>`;
   });
@@ -1847,37 +1801,37 @@ function renderDealDetail(d) {
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">`;
   [["roofAge","Roof"],["hvacAge","HVAC"],["parkingAge","Parking"]].forEach(([field,label])=>{
     h+=`<div><div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">${label}</div>
-    <input type="number" data-cond-field="${field}" value="${esc(String(d[field]||""))}" placeholder="e.g. 8" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif"></div>`;
+    <input type="number" data-cond-field="${field}" value="${esc(String(d[field]||""))}" placeholder="e.g. 8" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif"></div>`;
   });
   h+=`</div></div>
-    <button data-action="deal-save-condition" style="margin-top:14px;padding:7px 18px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">Save Condition</button>
+    <button data-action="deal-save-condition" style="margin-top:14px;padding:7px 18px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">Save Condition</button>
   </div>`;
 
   // Tenant Timeline
   h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Tenants${tenants.length?" ("+tenants.length+")":""}</div>
-      ${d.uwLink?`<button data-action="deal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">${tenants.length?"Re-sync from UW":"View Tenants"}</button>`:""}
+      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Tenants${tenants.length?" ("+tenants.length+")":""}</div>
+      ${d.uwLink?`<button data-action="deal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">${tenants.length?"Re-sync from UW":"View Tenants"}</button>`:""}
     </div>
     <div id="deal-tenants-container">${tenants.length?renderTenantTimeline(tenants):"<div style='color:var(--text-muted);font-size:12px'>Click View Tenants to sync from UW.</div>"}</div>
   </div>`;
 
   // Notes
-  if(d.notes){h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px"><div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Notes</div><div style="font-size:13px;color:var(--text-secondary);line-height:1.6">${esc(d.notes)}</div></div>`;}
+  if(d.notes){h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px"><div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Notes</div><div style="font-size:13px;color:var(--text-secondary);line-height:1.6">${esc(d.notes)}</div></div>`;}
 
   // Action buttons
   h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:8px">`;
-  STAGES.forEach(stg=>{h+=`<button data-action="deal-set-stage" data-value="${stg.id}" style="padding:6px 12px;border:1px solid ${d.stage===stg.id?stg.color:"var(--border)"};border-radius:8px;font-size:11px;cursor:pointer;background:${d.stage===stg.id?stg.color+"15":"var(--bg-card)"};color:${d.stage===stg.id?stg.color:"var(--text-muted)"};font-weight:600;font-family:'DM Sans',sans-serif">${stg.label}</button>`;});
-  h+=`<button data-action="deal-remove" style="margin-left:auto;padding:6px 14px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'DM Sans',sans-serif">✕ Remove Deal</button>`;
+  STAGES.forEach(stg=>{h+=`<button data-action="deal-set-stage" data-value="${stg.id}" style="padding:6px 12px;border:1px solid ${d.stage===stg.id?stg.color:"var(--border)"};border-radius:8px;font-size:11px;cursor:pointer;background:${d.stage===stg.id?stg.color+"15":"var(--bg-card)"};color:${d.stage===stg.id?stg.color:"var(--text-muted)"};font-weight:600;font-family:'Inter',sans-serif">${stg.label}</button>`;});
+  h+=`<button data-action="deal-remove" style="margin-left:auto;padding:6px 14px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'Inter',sans-serif">✕ Remove Deal</button>`;
   h+=`</div>`;
 
   // Call log overlay (hidden by default)
   h+=`<div id="call-log-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
     <div style="background:var(--bg-card);border-radius:14px;padding:28px;width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
-      <div style="font-family:'Outfit',sans-serif;font-size:17px;font-weight:800;margin-bottom:18px">Log a Call</div>
+      <div style="font-family:'Inter',sans-serif;font-size:17px;font-weight:800;margin-bottom:18px">Log a Call</div>
       <div style="margin-bottom:12px">
         <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">STATUS</div>
-        <select id="call-status-input" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif">
+        <select id="call-status-input" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">
           <option>Called — No Answer</option>
           <option>Left Voicemail</option>
           <option>Broker Sending Info</option>
@@ -1889,11 +1843,11 @@ function renderDealDetail(d) {
       </div>
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">NOTE (optional)</div>
-        <textarea id="call-note-input" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;resize:none" placeholder="Add a note..."></textarea>
+        <textarea id="call-note-input" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;resize:none" placeholder="Add a note..."></textarea>
       </div>
       <div style="display:flex;gap:8px">
-        <button id="call-log-save" style="flex:1;padding:10px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif">Save</button>
-        <button id="call-log-cancel" style="padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif">Cancel</button>
+        <button id="call-log-save" style="flex:1;padding:10px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif">Save</button>
+        <button id="call-log-cancel" style="padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;font-family:'Inter',sans-serif">Cancel</button>
       </div>
     </div>
   </div>`;
@@ -2099,7 +2053,7 @@ function renderUWCalc() {
   const impliedCap = price > 0 ? (noi/price)*100 : 0;
 
   let h = `<div style="max-width:680px;margin:32px auto;padding:0 24px">`;
-  h += `<h2 style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text);margin-bottom:20px">Quick Underwriting Calculator</h2>`;
+  h += `<h2 style="font-family:'Inter',sans-serif;font-size:22px;font-weight:800;color:var(--text);margin-bottom:20px">Quick Underwriting Calculator</h2>`;
   h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px">`;
   
   // Input grid
@@ -2108,7 +2062,7 @@ function renderUWCalc() {
    ["Rent / SF","uw-d-rent",u.rentPsf,"18.00"],["Vacancy %","uw-d-vac",u.vacancy,"8"],
    ["Expense Ratio %","uw-d-exp",u.expenseRatio,"35"],["Target Cap %","uw-d-cap",u.targetCap,"7.5"]
   ].forEach(([label,id,val,ph]) => {
-    h += `<div><label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">${label}</label><input type="number" id="${id}" value="${val}" placeholder="${ph}" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
+    h += `<div><label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">${label}</label><input type="number" id="${id}" value="${val}" placeholder="${ph}" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:'Inter',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
   });
   h += `</div>`;
 
@@ -2251,15 +2205,15 @@ function renderKPITracker() {
   h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="display:flex;align-items:center;gap:12px"><span class="stat-label">${periodLabel} Scorecard</span><span style="font-size:11px;color:var(--text-muted)">${label}</span></div>`;
   h += `<div style="display:flex;align-items:center;gap:8px"><div style="display:flex;gap:2px">`;
   ["week","month","quarter","year"].forEach(p => {
-    h += `<button data-kpi-period="${p}" style="padding:4px 10px;border:1px solid ${state.kpiPeriod===p?'#3B82F6':'var(--border)'};border-radius:6px;font-size:10px;cursor:pointer;background:${state.kpiPeriod===p?'#3B82F620':'transparent'};color:${state.kpiPeriod===p?'#3B82F6':'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${p.charAt(0).toUpperCase()+p.slice(1)}</button>`;
+    h += `<button data-kpi-period="${p}" style="padding:4px 10px;border:1px solid ${state.kpiPeriod===p?'#3B82F6':'var(--border)'};border-radius:6px;font-size:10px;cursor:pointer;background:${state.kpiPeriod===p?'#3B82F620':'transparent'};color:${state.kpiPeriod===p?'#3B82F6':'var(--text-muted)'};font-weight:600;font-family:'Inter',sans-serif">${p.charAt(0).toUpperCase()+p.slice(1)}</button>`;
   });
-  h += `</div><div style="text-align:center;min-width:60px"><div style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${gradeColor}">${grade}%</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Grade</div></div></div></div>`;
+  h += `</div><div style="text-align:center;min-width:60px"><div style="font-size:22px;font-weight:800;font-family:'Inter',sans-serif;color:${gradeColor}">${grade}%</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Grade</div></div></div></div>`;
 
   h += `<div style="display:grid;grid-template-columns:repeat(${kpis.length},1fr);gap:8px">`;
   kpis.forEach(k => {
     const pct = (k.goal && typeof k.goal === "number") ? Math.min(Math.round(k.actual/k.goal*100),100) : null;
     const barColor = pct !== null ? (pct >= 80 ? "#10B981" : pct >= 50 ? "#E8A838" : "#EF4444") : "#3B82F6";
-    h += `<div style="text-align:center"><div style="font-size:16px;font-weight:800;font-family:'Outfit',sans-serif;color:var(--text)">${k.actual}</div>`;
+    h += `<div style="text-align:center"><div style="font-size:16px;font-weight:800;font-family:'Inter',sans-serif;color:var(--text)">${k.actual}</div>`;
     if (k.goal && typeof k.goal === "number") {
       h += `<div style="height:4px;background:var(--border-light);border-radius:2px;margin:4px 0;overflow:hidden"><div style="height:100%;width:${pct}%;background:${barColor};border-radius:2px"></div></div>`;
       h += `<div style="font-size:8px;color:var(--text-muted)">/ ${k.goal}</div>`;
@@ -2287,7 +2241,7 @@ function renderContactsSection() {
   let contacts = getContacts();
   if (state.search) { const q=state.search.toLowerCase(); contacts=contacts.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.company||"").toLowerCase().includes(q)||(c.phone||"").includes(q)||(c.email||"").toLowerCase().includes(q)); }
   const cv = state.contactsView || "cards";
-  let h = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><div><span style="font-family:'Outfit',sans-serif;font-size:20px;font-weight:800;color:var(--text)">Contacts</span><span style="font-size:12px;color:var(--text-muted);margin-left:12px">${contacts.length} broker${contacts.length!==1?'s':''}</span></div>`;
+  let h = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px"><div><span style="font-family:'Inter',sans-serif;font-size:20px;font-weight:800;color:var(--text)">Contacts</span><span style="font-size:12px;color:var(--text-muted);margin-left:12px">${contacts.length} broker${contacts.length!==1?'s':''}</span></div>`;
   h += `<div class="view-toggle"><button class="view-btn ${cv==='cards'?'active':''}" data-contacts-view="cards">Cards</button><button class="view-btn ${cv==='table'?'active':''}" data-contacts-view="table">Table</button></div></div>`;
   if (!contacts.length) return h+`<div style="text-align:center;padding:60px 0;color:var(--text-muted)">No contacts found</div>`;
 
@@ -2346,7 +2300,7 @@ function renderTenantTimeline(tenants) {
   };
 
   let h=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px">`;
-  h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border)"><div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Lease Timeline</div>`;
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border)"><div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Lease Timeline</div>`;
   h+=`<div style="display:flex;gap:10px;font-size:9px;color:var(--text-muted);flex-wrap:wrap">`;
   h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#6366F1"></span>NNN</span>`;
   h+=`<span style="display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#10B981"></span>Gross</span>`;
@@ -2441,16 +2395,16 @@ function renderDDSection() {
 function renderDDDetail(dd){
   const tasks=dd.tasks||[];const tenants=dd.tenants||[];const done=tasks.filter(t=>t.completed).length;const tot=tasks.length;const pct=tot?Math.round(done/tot*100):0;const ddStg=DD_STAGES.find(s=>s.id===(dd.stage||"negotiation_psa"))||DD_STAGES[0];
   let h=`<div style="max-width:1100px;margin:0 auto">`;
-  h+=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px"><button data-action="dd-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'DM Sans',sans-serif">← Back</button><div style="flex:1"><div style="font-family:'Outfit',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(dd.dealName)}</div>${dd.address?`<div style="font-size:12px;color:var(--text-muted)">${esc(dd.address)}</div>`:''}</div><span style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:6px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div>`;
+  h+=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px"><button data-action="dd-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'Inter',sans-serif">← Back</button><div style="flex:1"><div style="font-family:'Inter',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(dd.dealName)}</div>${dd.address?`<div style="font-size:12px;color:var(--text-muted)">${esc(dd.address)}</div>`:''}</div><span style="font-size:11px;font-weight:600;padding:4px 12px;border-radius:6px;background:${ddStg.color}15;color:${ddStg.color}">${ddStg.label}</span></div>`;
   h+=`<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">`;
   if(dd.folderLink)h+=`<a href="${esc(dd.folderLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#3B82F6;text-decoration:none;font-weight:500">📁 Deal Folder</a>`;
   if(dd.uwLink)h+=`<a href="${esc(dd.uwLink)}" target="_blank" style="padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:11px;color:#D97706;text-decoration:none;font-weight:500">📊 UW</a>`;
-  DD_STAGES.forEach(s=>{h+=`<button data-action="dd-set-stage" data-value="${s.id}" style="padding:6px 12px;border:1px solid ${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--border)'};border-radius:8px;font-size:11px;cursor:pointer;background:${(dd.stage||"negotiation_psa")===s.id?s.color+'15':'var(--bg-card)'};color:${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--text-muted)'};font-weight:600;font-family:'DM Sans',sans-serif">${s.label}</button>`;});
-  h+=`<button data-action="dd-move-to-acq" style="padding:6px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'DM Sans',sans-serif;margin-left:auto">↩ Move to Acquisitions</button></div>`;
+  DD_STAGES.forEach(s=>{h+=`<button data-action="dd-set-stage" data-value="${s.id}" style="padding:6px 12px;border:1px solid ${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--border)'};border-radius:8px;font-size:11px;cursor:pointer;background:${(dd.stage||"negotiation_psa")===s.id?s.color+'15':'var(--bg-card)'};color:${(dd.stage||"negotiation_psa")===s.id?s.color:'var(--text-muted)'};font-weight:600;font-family:'Inter',sans-serif">${s.label}</button>`;});
+  h+=`<button data-action="dd-move-to-acq" style="padding:6px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'Inter',sans-serif;margin-left:auto">↩ Move to Acquisitions</button></div>`;
   // Tenants — with sync button
   h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">`;
-  h+=`<span style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">Tenants${tenants.length?' ('+tenants.length+')':''}</span>`;
-  if(dd.uwLink)h+=`<button data-action="dd-sync-uw" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">${tenants.length?'Re-sync from UW':'Sync from UW'}</button>`;
+  h+=`<span style="font-family:'Inter',sans-serif;font-size:16px;font-weight:700;color:var(--text)">Tenants${tenants.length?' ('+tenants.length+')':''}</span>`;
+  if(dd.uwLink)h+=`<button data-action="dd-sync-uw" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">${tenants.length?'Re-sync from UW':'Sync from UW'}</button>`;
   h+=`</div>`;
   if(tenants.length){
     h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px">`;
@@ -2463,9 +2417,9 @@ function renderDDDetail(dd){
     h+=renderTenantTimeline(tenants);
   }
   // DD Checklist
-  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:'Outfit',sans-serif;font-size:16px;font-weight:700;color:var(--text)">DD Checklist</div><span style="font-size:12px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${done}/${tot} (${pct}%)</span></div>`;
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:'Inter',sans-serif;font-size:16px;font-weight:700;color:var(--text)">DD Checklist</div><span style="font-size:12px;font-weight:700;color:${pct===100?'#10B981':'#3B82F6'}">${done}/${tot} (${pct}%)</span></div>`;
   tasks.forEach((t,i)=>{h+=`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light)"><button data-action="dd-toggle-task" data-idx="${i}" style="background:none;border:none;cursor:pointer;font-size:16px">${t.completed?'✅':'⬜'}</button><span style="flex:1;font-size:13px;color:${t.completed?'var(--text-muted)':'var(--text)'};${t.completed?'text-decoration:line-through':''}">${esc(t.text)}</span><button data-action="dd-del-task" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px">✕</button></div>`;});
-  h+=`<button data-action="dd-add-task" style="margin-top:10px;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;color:var(--text-muted);font-family:'DM Sans',sans-serif;width:100%;text-align:center">+ Add Task</button></div>`;
+  h+=`<button data-action="dd-add-task" style="margin-top:10px;padding:8px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;color:var(--text-muted);font-family:'Inter',sans-serif;width:100%;text-align:center">+ Add Task</button></div>`;
   h+=`</div>`;return h;
 }
 function wireDDEvents(){
@@ -2601,7 +2555,7 @@ function renderKPIsTab() {
   [{label:"Weekly",data:weekly,sub:"This Week"},{label:"Monthly",data:monthly,sub:nowDate.toLocaleString('default',{month:'long'})},{label:"Quarterly",data:quarterly,sub:"Q"+(qtr+1)+" "+nowDate.getFullYear()},{label:"Yearly",data:yearly,sub:nowDate.getFullYear().toString()}].forEach(card=>{
     const gc=card.data.grade>=80?"#10B981":card.data.grade>=50?"#E8A838":"#EF4444";
     h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px">`;
-    h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div style="font-size:14px;font-weight:700;color:var(--text)">${card.label}</div><div style="font-size:10px;color:var(--text-muted)">${card.sub}</div></div><div style="text-align:center"><div style="font-size:28px;font-weight:800;font-family:'Outfit',sans-serif;color:${gc}">${card.data.grade}%</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase">Grade</div></div></div>`;
+    h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div style="font-size:14px;font-weight:700;color:var(--text)">${card.label}</div><div style="font-size:10px;color:var(--text-muted)">${card.sub}</div></div><div style="text-align:center"><div style="font-size:28px;font-weight:800;font-family:'Inter',sans-serif;color:${gc}">${card.data.grade}%</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase">Grade</div></div></div>`;
     card.data.kpis.forEach(k=>{
       const pct=k.goal>0?Math.min(Math.round(k.actual/k.goal*100),100):0;
       const bc=pct>=80?"#10B981":pct>=50?"#E8A838":"#EF4444";
@@ -2625,7 +2579,7 @@ function renderKPIsTab() {
   h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:16px">Conversion Funnel (All Time)</div><div style="display:flex;align-items:center;gap:10px;justify-content:center">`;
   [{label:"All Deals",count:totalCreated,color:"#6366F1"},{label:"Underwriting",count:reachedUW,color:"#E8A838",rate:pToUW},{label:"LOI",count:reachedLOI,color:"#3B82F6",rate:uwToLOI},{label:"DD",count:reachedDD,color:"#0EA5E9",rate:loiToDD}].forEach((s,i)=>{
     if(i>0){const rc=s.rate>=50?"#10B981":s.rate>=25?"#E8A838":"#EF4444";h+=`<div style="display:flex;flex-direction:column;align-items:center"><span style="font-size:11px;font-weight:700;color:${rc}">${s.rate}%</span><span style="color:var(--text-muted);font-size:16px">→</span></div>`;}
-    h+=`<div style="text-align:center"><div style="font-size:24px;font-weight:800;font-family:'Outfit',sans-serif;color:${s.color}">${s.count}</div><div style="font-size:10px;color:var(--text-muted);font-weight:600">${s.label}</div></div>`;
+    h+=`<div style="text-align:center"><div style="font-size:24px;font-weight:800;font-family:'Inter',sans-serif;color:${s.color}">${s.count}</div><div style="font-size:10px;color:var(--text-muted);font-weight:600">${s.label}</div></div>`;
   });
   h+=`</div></div>`;
 
@@ -2635,7 +2589,7 @@ function renderKPIsTab() {
     const inStage=active.filter(d=>d.stage===stageId&&d.stageChangedDate);
     const avg=inStage.length?Math.round(inStage.reduce((s,d)=>s+(Date.now()-d.stageChangedDate)/DAY,0)/inStage.length):null;
     const color=stageId==="prospecting"?"#6366F1":stageId==="underwriting"?"#E8A838":"#3B82F6";
-    h+=`<div style="text-align:center;background:var(--bg);border-radius:8px;padding:14px"><div style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${color}">${avg!==null?avg+"d":"—"}</div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;margin-top:4px">${stageId}</div></div>`;
+    h+=`<div style="text-align:center;background:var(--bg);border-radius:8px;padding:14px"><div style="font-size:22px;font-weight:800;font-family:'Inter',sans-serif;color:${color}">${avg!==null?avg+"d":"—"}</div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;margin-top:4px">${stageId}</div></div>`;
   });
   h+=`</div></div></div>`;
 
@@ -2645,13 +2599,13 @@ function renderKPIsTab() {
 
   h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">`;
   // Flags
-  h+=`<div style="background:var(--bg-card);border:1px solid ${flaggedDeals.length?'#FECACA':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${flaggedDeals.length?'#DC2626':'var(--text)'}">Deal Health Flags</div><span style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${flaggedDeals.length?'#DC2626':'#10B981'}">${flaggedDeals.length}</span></div>`;
+  h+=`<div style="background:var(--bg-card);border:1px solid ${flaggedDeals.length?'#FECACA':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${flaggedDeals.length?'#DC2626':'var(--text)'}">Deal Health Flags</div><span style="font-size:22px;font-weight:800;font-family:'Inter',sans-serif;color:${flaggedDeals.length?'#DC2626':'#10B981'}">${flaggedDeals.length}</span></div>`;
   if(flaggedDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;flaggedDeals.forEach(d=>{const flags=getDealFlagsDash(d);const link=d.listingLink||d.costarLink||d.uwLink||"";h+=`<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;text-decoration:none;${link?'cursor:pointer':''}"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:var(--text-muted)"> — ${flags.map(f=>f.msg).join(", ")}</span></a>`;});h+=`</div>`;}
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">All deals healthy ✓</div>`;
   h+=`</div>`;
 
   // Stale
-  h+=`<div style="background:var(--bg-card);border:1px solid ${staleDeals.length?'#FDE68A':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${staleDeals.length?'#D97706':'var(--text)'}">Stale Deals (7+ days idle)</div><span style="font-size:22px;font-weight:800;font-family:'Outfit',sans-serif;color:${staleDeals.length?'#D97706':'#10B981'}">${staleDeals.length}</span></div>`;
+  h+=`<div style="background:var(--bg-card);border:1px solid ${staleDeals.length?'#FDE68A':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${staleDeals.length?'#D97706':'var(--text)'}">Stale Deals (7+ days idle)</div><span style="font-size:22px;font-weight:800;font-family:'Inter',sans-serif;color:${staleDeals.length?'#D97706':'#10B981'}">${staleDeals.length}</span></div>`;
   if(staleDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;staleDeals.forEach(d=>{const la=d.lastActivity||d.createdAt||0;const days=Math.floor((Date.now()-la)/DAY);const link=d.listingLink||d.costarLink||d.uwLink||"";h+=`<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;text-decoration:none;display:flex;justify-content:space-between;${link?'cursor:pointer':''}"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:#D97706;font-weight:600">${days}d idle</span></a>`;});h+=`</div>`;}
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">No stale deals ✓</div>`;
   h+=`</div></div>`;
