@@ -3035,9 +3035,46 @@ function wireDealDetailEvents() {
       try {
         const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Call to Broker'!B16:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
         const compsData = await compsResp.json();
-        // Filter rows that have at least a type (col B, index 0) or address (col C, index 1)
         state.dealDetailComps = (compsData.values || []).filter(row => row && (row[0] || row[1]));
       } catch(e) { state.dealDetailComps = []; }
+
+      // Backfill expenses input from UW Expenses!B18:B27 and B32:B34
+      try {
+        const [expResp, btlResp] = await Promise.all([
+          fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Expenses'!B18:B27", {headers:{"Authorization":"Bearer "+state.accessToken}}),
+          fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Expenses'!B32:B34", {headers:{"Authorization":"Bearer "+state.accessToken}})
+        ]);
+        const expData = await expResp.json();
+        const btlData = await btlResp.json();
+        const ev = expData.values || [];
+        const bv = btlData.values || [];
+        const gv = (rows, i) => parseFloat((rows[i]?.[0]||"").toString().replace(/[$,]/g,"")) || "";
+        state.expenseRows = {
+          serviceContracts: gv(ev,0), electricity: gv(ev,1), landscape: gv(ev,2),
+          repairsMaint: gv(ev,3), janitor: gv(ev,4), utilities: gv(ev,5),
+          mgmtFee: gv(ev,6), nonReimbursable: gv(ev,7),
+          propertyTax: gv(ev,8), insurance: gv(ev,9),
+          tiCosts: gv(bv,0), capEx: gv(bv,1), lc: gv(bv,2)
+        };
+      } catch(e) { /* keep existing expenseRows if any */ }
+
+      // Backfill rent roll input rows from synced tenants (annual mode)
+      if (tenants.length) {
+        state.rrRentMode = "annual";
+        state.rrRecMode = "annual";
+        state.rrRows = tenants.map(t => ({
+          creditType: t.creditType || "",
+          name: t.name || "",
+          suite: t.suite || "",
+          gla: t.sqft || "",
+          leaseStart: t.leaseStart || "",
+          leaseEnd: t.isMTM ? "MTM" : (t.leaseEnd || ""),
+          annualRent: t.annualRent || "",
+          monthlyRent: "",
+          annualRec: t.annualRecovery || "",
+          monthlyRec: ""
+        }));
+      }
       container.innerHTML = tenants.length ? renderTenantTimeline(tenants) : '<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';
       // Refresh scorecard
       const scorecardEl = document.getElementById("deal-scorecard");
