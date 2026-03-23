@@ -2483,14 +2483,14 @@ async function saveExpensesToUW(uwUrl) {
 
     // Build batch update
     const updates = [
-      { range:"'Expenses'!C18", values:[[parseFloat(e.serviceContracts)||""]] },
-      { range:"'Expenses'!C19", values:[[parseFloat(e.electricity)||""]] },
-      { range:"'Expenses'!C20", values:[[parseFloat(e.landscape)||""]] },
-      { range:"'Expenses'!C21", values:[[parseFloat(e.repairsMaint)||""]] },
-      { range:"'Expenses'!C22", values:[[parseFloat(e.janitor)||""]] },
-      { range:"'Expenses'!C23", values:[[parseFloat(e.utilities)||""]] },
-      { range:"'Expenses'!C24", values:[[mgmtCurrent||""]] },
-      { range:"'Expenses'!C25", values:[[parseFloat(e.nonReimbursable)||""]] },
+      { range:"'Expenses'!B18", values:[[parseFloat(e.serviceContracts)||""]] },
+      { range:"'Expenses'!B19", values:[[parseFloat(e.electricity)||""]] },
+      { range:"'Expenses'!B20", values:[[parseFloat(e.landscape)||""]] },
+      { range:"'Expenses'!B21", values:[[parseFloat(e.repairsMaint)||""]] },
+      { range:"'Expenses'!B22", values:[[parseFloat(e.janitor)||""]] },
+      { range:"'Expenses'!B23", values:[[parseFloat(e.utilities)||""]] },
+      { range:"'Expenses'!B24", values:[[mgmtCurrent||""]] },
+      { range:"'Expenses'!B25", values:[[parseFloat(e.nonReimbursable)||""]] },
       { range:"'Expenses'!B26", values:[[parseFloat(e.propertyTax)||""]] },
       { range:"'Expenses'!B27", values:[[parseFloat(e.insurance)||""]] },
       // Pro forma
