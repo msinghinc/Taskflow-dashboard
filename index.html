@@ -2830,19 +2830,19 @@ function renderDealDetail(d) {
   h+=`</div>`;
 
   // Call log overlay
-  h+=`<div id="call-log-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
-    <div style="background:var(--bg-card);border-radius:14px;padding:28px;width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
+  h+=`<div id="call-log-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center">
+    <div style="background:var(--bg-card);border-radius:14px;padding:28px;width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.3)" onclick="event.stopPropagation()">
       <div style="font-family:'Inter',sans-serif;font-size:17px;font-weight:800;margin-bottom:18px">Log a Call</div>
       <div style="margin-bottom:12px">
         <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">STATUS</div>
-        <select id="call-status-input" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">
+        <select id="call-status-input" onclick="event.stopPropagation()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">
           <option>Called — No Answer</option><option>Left Voicemail</option><option>Broker Sending Info</option>
           <option>Not Interested</option><option>Deal Sold</option><option>Wrong Number</option><option>Other</option>
         </select>
       </div>
       <div style="margin-bottom:18px">
         <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">NOTE (optional)</div>
-        <textarea id="call-note-input" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;resize:none" placeholder="Add a note..."></textarea>
+        <textarea id="call-note-input" rows="3" onclick="event.stopPropagation()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;resize:none" placeholder="Add a note..."></textarea>
       </div>
       <div style="display:flex;gap:8px">
         <button id="call-log-save" style="flex:1;padding:10px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif">Save</button>
@@ -2899,9 +2899,9 @@ function wireDealDetailEvents() {
   const saveCallBtn = document.getElementById("call-log-save");
   const cancelCallBtn = document.getElementById("call-log-cancel");
   if (logCallBtn && overlay) {
-    logCallBtn.addEventListener("click", () => { overlay.style.display = "flex"; });
-    cancelCallBtn.addEventListener("click", () => { overlay.style.display = "none"; });
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.style.display = "none"; });
+    logCallBtn.addEventListener("click", (e) => { e.stopPropagation(); overlay.style.display = "flex"; });
+    cancelCallBtn.addEventListener("click", (e) => { e.stopPropagation(); overlay.style.display = "none"; });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) { e.stopPropagation(); overlay.style.display = "none"; } });
     saveCallBtn.addEventListener("click", async () => {
       const status = document.getElementById("call-status-input").value;
       const note = document.getElementById("call-note-input").value.trim();
