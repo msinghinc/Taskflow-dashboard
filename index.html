@@ -1460,7 +1460,193 @@ function renderScorecard(d, tenants) {
   </div>`;
 }
 
-// ---- DEAL DETAIL PAGE ----
+// ---- DEAL ANALYSIS SUMMARY ----
+function renderDealSummary(d, tenants) {
+  if (!state.dealDetailSynced && !d.propertyCondition) return "";
+
+  const now = Date.now();
+  const DAY = 864e5;
+  const marketRent = parseFloat(d.marketRent) || 0;
+  const askingPrice = parseFloat(d.askingPrice) || 0;
+  const proFormaNoi = state.dealDetailProFormaNoi || 0;
+  const proFormaCap = askingPrice > 0 && proFormaNoi > 0 ? (proFormaNoi / askingPrice * 100).toFixed(1) : null;
+  const currentCap = parseFloat(d.capRate) || 0;
+  const activeTenants = (tenants || []).filter(t => !t.isVacant);
+  const vacantTenants = (tenants || []).filter(t => t.isVacant);
+  const totalGLA = (tenants || []).reduce((s, t) => s + (t.sqft || 0), 0);
+  const totalGrossRent = activeTenants.reduce((s, t) => s + (t.annualRent || 0), 0);
+  const usefulLife = { roof: 25, hvac: 20, parking: 25 };
+
+  function adjMarket(sqft) {
+    if (!marketRent) return 0;
+    if (sqft < 1500) return marketRent * 0.8;
+    if (sqft < 5000) return marketRent * 0.7;
+    if (sqft < 10000) return marketRent * 0.6;
+    return marketRent * 0.5;
+  }
+
+  const paragraphs = [];
+  const improvements = [];
+
+  // ---- PHYSICAL ----
+  if (d.propertyCondition) {
+    const phys = calcPhysicalScore(d);
+    let parts = [`Overall condition is <strong>${d.propertyCondition}</strong>.`];
+
+    ["roof","hvac","parking"].forEach(sys => {
+      const condField = sys + "Condition";
+      const ageField = sys + "Age";
+      const life = usefulLife[sys];
+      const cond = d[condField];
+      const age = parseFloat(d[ageField]) || 0;
+      if (cond || age) {
+        const pctUsed = age ? Math.round(age / life * 100) : null;
+        const pctLeft = pctUsed !== null ? 100 - pctUsed : null;
+        let txt = sys.charAt(0).toUpperCase() + sys.slice(1);
+        if (cond) txt += ` is <strong>${cond}</strong>`;
+        if (pctLeft !== null) txt += ` (${pctLeft}% of useful life remaining)`;
+        parts.push(txt + ".");
+        if (pctLeft !== null && pctLeft < 25) improvements.push(`${sys.charAt(0).toUpperCase()+sys.slice(1)} is near end of useful life — budget for replacement or negotiate seller credit.`);
+      }
+    });
+    if (d.deferredMaint > 0) { parts.push(`Deferred maintenance of <strong>$${Number(d.deferredMaint).toLocaleString()}</strong> noted.`); if (d.deferredMaint > 50000) improvements.push("Deferred maintenance exceeds $50K — negotiate a price reduction or escrow credit at close."); }
+    if (d.envConcerns) { parts.push(`Environmental concern noted: <strong>${esc(d.envConcerns)}</strong>.`); improvements.push("Resolve environmental concerns — order Phase I before LOI if not done."); }
+
+    paragraphs.push({ label: "Physical", score: phys, text: parts.join(" ") });
+  }
+
+  // ---- COMPS ----
+  if (state.dealDetailSynced) {
+    const compsCount = state.dealDetailComps.length;
+    const comps = calcCompsScore(d);
+    if (compsCount < 3) {
+      paragraphs.push({ label: "Comps", score: null, text: `Only <strong>${compsCount}/3</strong> comps loaded. Minimum 3 required for a reliable market comparison. ${compsCount === 0 ? "No comps have been added to the UW yet." : `Need ${3 - compsCount} more comp${3-compsCount>1?"s":""}.`}` });
+      improvements.push(`Add ${3 - compsCount} more comp${3-compsCount>1?"s":""} to the Call to Brokers tab in the UW to complete market analysis.`);
+    } else {
+      paragraphs.push({ label: "Comps", score: typeof comps === "number" ? comps : null, text: `<strong>${compsCount} comp${compsCount>1?"s":""}</strong> loaded from UW. ${compsCount >= 5 ? "Strong comp set — market pricing well supported." : compsCount >= 3 ? "Adequate comp coverage." : ""}` });
+      if (compsCount < 5) improvements.push("Adding more comps (5+) would strengthen market pricing confidence.");
+    }
+  }
+
+  // ---- FINANCIAL ----
+  if (state.dealDetailSynced) {
+    const fin = calcFinancialScore(d);
+    let parts = [];
+    if (currentCap) parts.push(`Current cap rate is <strong>${currentCap}%</strong> — ${currentCap >= 8 ? "strong going-in yield" : currentCap >= 6 ? "acceptable going-in yield" : "below typical threshold, deal depends on pro forma"}.`);
+    if (proFormaCap) {
+      const spread = (parseFloat(proFormaCap) - currentCap).toFixed(1);
+      parts.push(`Pro forma cap is <strong>${proFormaCap}%</strong> (${spread > 0 ? "+" : ""}${spread}% spread).`);
+      if (spread >= 5) parts.push("Significant value-add opportunity.");
+      else if (spread >= 3) parts.push("Moderate upside.");
+      else if (spread > 0) parts.push("Limited spread — closer to stabilized pricing.");
+    }
+    const maxVacantSf = vacantTenants.length ? Math.max(...vacantTenants.map(t => t.sqft || 0)) : 0;
+    if (maxVacantSf > 0) {
+      const achievability = maxVacantSf > 10000 ? 25 : maxVacantSf > 5000 ? 50 : maxVacantSf > 1500 ? 70 : 90;
+      parts.push(`Pro forma achievability is <strong>${achievability}%</strong> based on largest vacant suite (${fmtNum(maxVacantSf)} SF).`);
+      if (achievability <= 25) improvements.push(`${fmtNum(maxVacantSf)} SF vacancy is a major execution risk — securing a tenant LOI before close would dramatically improve the financial score.`);
+      else if (achievability <= 50) improvements.push(`${fmtNum(maxVacantSf)} SF vacancy is hard to lease — confirm tenant demand before proceeding.`);
+    } else if (state.dealDetailSynced) {
+      parts.push("Property is fully occupied — pro forma upside driven by rent growth and lease renewals.");
+    }
+    if (!proFormaCap && state.dealDetailSynced) { parts.push("Pro forma NOI not yet populated in UW."); improvements.push("Complete the Expenses tab in UW to generate a pro forma cap rate."); }
+    if (parts.length) paragraphs.push({ label: "Financial", score: fin, text: parts.join(" ") });
+  }
+
+  // ---- TENANT CREDIT ----
+  if (activeTenants.length) {
+    const credit = calcTenantCreditScore(tenants);
+    const creditMap = { national:"National", regional:"Regional", local:"Local", "mom & pop":"Mom & Pop" };
+    const nationals = activeTenants.filter(t => (t.creditType||"").toLowerCase() === "national");
+    const momPops = activeTenants.filter(t => (t.creditType||"").toLowerCase().includes("mom"));
+    let parts = [];
+    if (nationals.length) parts.push(`<strong>${nationals.length}</strong> national credit tenant${nationals.length>1?"s":""} (${nationals.map(t=>esc(t.name)).join(", ")}).`);
+    if (momPops.length) parts.push(`<strong>${momPops.length}</strong> mom & pop tenant${momPops.length>1?"s":""} — higher renewal uncertainty.`);
+    const unrated = activeTenants.filter(t => !t.creditType);
+    if (unrated.length) { parts.push(`<strong>${unrated.length}</strong> tenant${unrated.length>1?"s":""} missing credit type.`); improvements.push("Set credit type (National/Regional/Local/Mom & Pop) for all tenants in Rent Roll column A to complete tenant credit scoring."); }
+    if (parts.length) paragraphs.push({ label: "Tenant Credit", score: credit, text: parts.join(" ") });
+  }
+
+  // ---- LEASE RISK ----
+  if (activeTenants.length || vacantTenants.length) {
+    const lease = calcLeaseRiskScore(tenants, d.walt);
+    const parts = [];
+    const flags = [];
+
+    // Concentration flags
+    activeTenants.forEach(t => {
+      const revPct = totalGrossRent > 0 ? t.annualRent / totalGrossRent : 0;
+      if (revPct >= 0.30) { flags.push(`<strong>${esc(t.name)}</strong> represents <strong>${Math.round(revPct*100)}%</strong> of gross revenue — high concentration risk.`); improvements.push(`${esc(t.name)} is at ${Math.round(revPct*100)}% revenue concentration. Secure a long-term renewal before close.`); }
+      else if (activeTenants.length > 4 && revPct >= 0.20) flags.push(`<strong>${esc(t.name)}</strong> at <strong>${Math.round(revPct*100)}%</strong> of revenue — watch concentration.`);
+    });
+
+    // Expiring tenants
+    activeTenants.filter(t => !t.isMTM && t.leaseEnd).forEach(t => {
+      const monthsLeft = (new Date(t.leaseEnd+"T00:00:00").getTime() - now) / (30 * DAY);
+      const adj = adjMarket(t.sqft);
+      const aboveMarket = adj > 0 && t.rentPerSf > adj;
+      if (monthsLeft <= 6) {
+        flags.push(`<strong>${esc(t.name)}</strong> expires in <strong>${Math.round(monthsLeft)} months</strong> — urgent. ${aboveMarket ? "Paying above market, replacement risk." : "Below market, renewal opportunity."}`);
+        if (aboveMarket) improvements.push(`${esc(t.name)} expires in ${Math.round(monthsLeft)} months above market — critical to address before close.`);
+      } else if (monthsLeft <= 18) {
+        flags.push(`<strong>${esc(t.name)}</strong> expires in <strong>${Math.round(monthsLeft)} months</strong>. ${aboveMarket ? "Above market." : "Below market."}`);
+        if (aboveMarket) improvements.push(`${esc(t.name)} expires in ${Math.round(monthsLeft)} months above market — request estoppel and discuss renewal.`);
+      }
+    });
+
+    // MTM tenants
+    activeTenants.filter(t => t.isMTM || (t.leaseEnd||"").toUpperCase()==="MTM").forEach(t => {
+      const tenure = t.leaseStart ? (now - new Date(t.leaseStart+"T00:00:00").getTime()) / (365 * DAY) : 0;
+      if (tenure < 2) { flags.push(`<strong>${esc(t.name)}</strong> is MTM with only <strong>${Math.round(tenure*12)} months</strong> tenure — high risk.`); improvements.push(`${esc(t.name)} is MTM with short tenure — negotiate a minimum 3yr lease before close.`); }
+      else if (tenure >= 5) flags.push(`<strong>${esc(t.name)}</strong> is MTM but has <strong>${Math.floor(tenure)} years</strong> tenure — established tenant, lower risk.`);
+    });
+
+    // Vacancy
+    vacantTenants.forEach(t => {
+      flags.push(`<strong>${fmtNum(t.sqft)} SF</strong> vacant${t.suite ? " (Suite "+esc(t.suite)+")" : ""}. ${t.sqft > 10000 ? "Large vacancy — major leasing risk." : t.sqft > 5000 ? "Mid-size vacancy — will take time to fill." : "Small suite — should lease quickly."}`);
+      if (t.sqft > 5000) improvements.push(`${fmtNum(t.sqft)} SF vacancy — get a tenant LOI or letter of intent before close to de-risk.`);
+    });
+
+    if (flags.length) parts.push(flags.join(" "));
+    else parts.push("No significant lease risk flags.");
+    paragraphs.push({ label: "Lease Risk", score: lease, text: parts.join(" ") });
+  }
+
+  if (!paragraphs.length) return "";
+
+  // Score color helper
+  function sColor(s) { return s === null ? "#94A3B8" : s >= 8 ? "#10B981" : s >= 5 ? "#E8A838" : "#EF4444"; }
+
+  let h = `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px">Deal Analysis Summary</div>`;
+
+  paragraphs.forEach(p => {
+    const sc = p.score !== null && p.score !== undefined;
+    h += `<div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border-light)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:700;color:var(--text)">${p.label}</span>
+        ${sc ? `<span style="font-size:11px;font-weight:700;color:${sColor(p.score)};background:${sColor(p.score)}15;padding:2px 8px;border-radius:4px">${p.score}/10</span>` : `<span style="font-size:11px;color:var(--text-muted)">No Score</span>`}
+      </div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.7">${p.text}</div>
+    </div>`;
+  });
+
+  // Improvements
+  if (improvements.length) {
+    h += `<div style="margin-top:4px">
+      <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">💡 How to improve this deal</div>`;
+    improvements.forEach(imp => {
+      h += `<div style="display:flex;gap:8px;margin-bottom:6px;font-size:12px;color:var(--text-secondary);line-height:1.5">
+        <span style="color:#F59E0B;margin-top:1px">→</span>
+        <span>${imp}</span>
+      </div>`;
+    });
+    h += `</div>`;
+  }
+
+  h += `</div>`;
+  return h;
+}
 function renderDealDetail(d) {
   const s = stg(d.stage);
   const p = pri(d.priority);
@@ -1508,6 +1694,9 @@ function renderDealDetail(d) {
 
   // Scorecard
   h += renderScorecard(d, tenants);
+
+  // AI Summary
+  h += renderDealSummary(d, tenants);
 
   // Broker section
   if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
@@ -1740,9 +1929,9 @@ function wireDealDetailEvents() {
         state.dealDetailComps = (compsData.values || []).filter(row => row[0] && row[0].toString().trim());
       } catch(e) { state.dealDetailComps = []; }
       container.innerHTML = tenants.length ? renderTenantTimeline(tenants) : '<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';
-      // Refresh scorecard with updated tenants + comps
+      // Refresh scorecard + summary with updated data
       const scorecardEl = document.getElementById("deal-scorecard");
-      if (scorecardEl) scorecardEl.outerHTML = renderScorecard(d, tenants);
+      if (scorecardEl) scorecardEl.outerHTML = renderScorecard(d, tenants) + renderDealSummary(d, tenants);
       syncBtn.textContent = "Re-sync from UW"; syncBtn.style.pointerEvents = "auto";
     } catch(e) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>'; syncBtn.textContent = "View Tenants"; syncBtn.style.pointerEvents = "auto"; }
   });
