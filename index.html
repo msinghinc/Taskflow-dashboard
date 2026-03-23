@@ -2020,11 +2020,12 @@ function wireDealDetailEvents() {
           downPct: strip(downData.values?.[0]?.[0])
         };
       } catch(e) { state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 }; }
-      // Also fetch Comps tab
+      // Also fetch Comps from Call to Broker tab (B16:J100 — skip col A which is empty)
       try {
-        const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Comps'!A2:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
+        const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Call to Broker'!B16:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
         const compsData = await compsResp.json();
-        state.dealDetailComps = (compsData.values || []).filter(row => row[0] && row[0].toString().trim());
+        // Filter rows that have at least a type (col B, index 0) or address (col C, index 1)
+        state.dealDetailComps = (compsData.values || []).filter(row => row && (row[0] || row[1]));
       } catch(e) { state.dealDetailComps = []; }
       container.innerHTML = tenants.length ? renderTenantTimeline(tenants) : '<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';
       // Refresh scorecard
