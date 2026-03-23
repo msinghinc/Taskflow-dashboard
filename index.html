@@ -510,6 +510,7 @@ let state = {
   rrRentMode: "annual",
   rrRecMode: "annual",
   rrRows: [],
+  expenseRows: null,
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -778,6 +779,7 @@ function initAuth() {
       await findSpreadsheet();
       await loadDeals();
       render();
+      startKPISnapshotTimer();
     }
   });
 }
@@ -2216,7 +2218,247 @@ function renderFinancialAnalysis(d) {
   </div>`;
 }
 
-// ---- RENT ROLL INPUT ----
+// ---- EXPENSES INPUT ----
+function renderExpensesInput(d) {
+  const uwLink = d.uwLink || "";
+  const askingPrice = parseFloat(d.askingPrice) || 0;
+  const GENERAL_MULT = Math.pow(1.03, 4);   // 3% compounded × 4 years
+  const INS_MULT     = 1.15;                 // 15% total
+  const TAX_RATE     = 0.01025;              // 1.025% of purchase price
+
+  // Default expense rows if not yet initialized
+  if (!state.expenseRows) {
+    state.expenseRows = {
+      serviceContracts: "", electricity: "", landscape: "", repairsMaint: "",
+      janitor: "", utilities: "", mgmtFee: "", nonReimbursable: "",
+      propertyTax: "", insurance: "", tiCosts: "", capEx: "", lc: ""
+    };
+  }
+  const e = state.expenseRows;
+
+  // Pro forma gross revenue from TILC model Year 1 (for mgmt fee %)
+  const tilcModel = state.dealDetailSynced
+    ? buildTILCModel(state.dealDetailTenants, parseFloat(d.marketRent)||0,
+        state.dealDetailAcqDate||new Date(), state.dealDetailProFormaExpenses||0, parseFloat(d.sqft)||0)
+    : null;
+  const pfGross = tilcModel ? tilcModel.annual[3].grossIncome : 0; // Year 4 gross
+
+  // Management fee suggestion
+  const sacAreaKeywords = ["sacramento","citrus heights","elk grove","roseville","folsom",
+    "rancho cordova","natomas","fair oaks","orangevale","antelope","lincoln","rocklin","granite bay"];
+  const addrLower = (d.address||"").toLowerCase();
+  const nearSac = sacAreaKeywords.some(k => addrLower.includes(k));
+  const mgmtSuggestion = nearSac
+    ? { label: "Flat rate (near Citrus Heights)", value: 6000 }
+    : { label: `5% of pro forma gross${pfGross ? " = $"+Math.round(pfGross*0.05).toLocaleString() : ""}`, value: pfGross ? Math.round(pfGross * 0.05) : 0 };
+
+  // Pro forma calculations
+  const pf = (val) => parseFloat(val) > 0 ? parseFloat(val) * GENERAL_MULT : 0;
+  const pfTax = askingPrice > 0 ? askingPrice * TAX_RATE : (parseFloat(e.propertyTax)||0) * GENERAL_MULT;
+  const pfIns = parseFloat(e.insurance) > 0 ? parseFloat(e.insurance) * INS_MULT : 0;
+  const pfMgmt = parseFloat(e.mgmtFee) > 0 ? parseFloat(e.mgmtFee) * GENERAL_MULT
+    : mgmtSuggestion.value > 0 ? mgmtSuggestion.value * GENERAL_MULT : 0;
+
+  const totalCurrent = [e.serviceContracts,e.electricity,e.landscape,e.repairsMaint,
+    e.janitor,e.utilities,e.mgmtFee||mgmtSuggestion.value,e.nonReimbursable,e.propertyTax,e.insurance]
+    .reduce((s,v) => s+(parseFloat(v)||0), 0);
+  const totalPF = [pf(e.serviceContracts),pf(e.electricity),pf(e.landscape),pf(e.repairsMaint),
+    pf(e.janitor),pf(e.utilities),pfMgmt,pf(e.nonReimbursable),pfTax,pfIns]
+    .reduce((s,v) => s+v, 0);
+
+  const inStyle = `width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif`;
+  const calcStyle = `width:100%;padding:5px 8px;border:1px solid transparent;border-radius:6px;font-size:12px;background:rgba(0,0,0,0.03);color:var(--text-muted);font-family:'Inter',sans-serif;text-align:right`;
+
+  function inp(field, val, placeholder="0") {
+    return `<input type="number" value="${val||""}" placeholder="${placeholder}"
+      style="${inStyle}"
+      oninput="state.expenseRows['${field}']=this.value;document.getElementById('exp-input-wrap').outerHTML=renderExpensesInput(state.deals.find(x=>x.id===state.selectedDealDetail))">`;
+  }
+
+  function pfCell(val) {
+    return `<div style="${calcStyle}">${val > 0 ? "$"+Math.round(val).toLocaleString() : "—"}</div>`;
+  }
+
+  const thS = `padding:8px 10px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid var(--border);text-align:left`;
+  const tdS = `padding:5px 6px;border-bottom:1px solid var(--border-light)`;
+  const labelS = `padding:5px 10px;font-size:12px;color:var(--text-secondary);border-bottom:1px solid var(--border-light)`;
+
+  let h = `<div id="exp-input-wrap" style="background:var(--bg-card);border-radius:var(--radius-lg);padding:20px;margin-bottom:16px;box-shadow:var(--shadow-sm)">`;
+  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div>
+      <div style="font-size:17px;font-weight:600;color:var(--text);letter-spacing:-0.3px">Expenses</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Pro forma: 3% annual growth · Tax: ${(TAX_RATE*100).toFixed(3)}% of purchase price · Insurance: 15% total increase</div>
+    </div>
+  </div>`;
+
+  h += `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr>
+      <th style="${thS}">Line Item</th>
+      <th style="${thS};text-align:right">Current ($)</th>
+      <th style="${thS};text-align:right">Pro Forma (Yr 4)</th>
+      <th style="${thS};text-align:right;width:80px">UW Cell</th>
+    </tr></thead><tbody>`;
+
+  const rows = [
+    ["Service Contracts",  "serviceContracts",  e.serviceContracts,  pf(e.serviceContracts),  "C18"],
+    ["Electricity",        "electricity",        e.electricity,        pf(e.electricity),        "C19"],
+    ["Landscape",          "landscape",          e.landscape,          pf(e.landscape),          "C20"],
+    ["Repairs & Maint.",   "repairsMaint",       e.repairsMaint,       pf(e.repairsMaint),       "C21"],
+    ["Janitor",            "janitor",            e.janitor,            pf(e.janitor),            "C22"],
+    ["Utilities",          "utilities",          e.utilities,          pf(e.utilities),          "C23"],
+    ["Non-Reimbursable",   "nonReimbursable",    e.nonReimbursable,    pf(e.nonReimbursable),    "C25"],
+  ];
+
+  rows.forEach(([label, field, cur, pfVal, cell]) => {
+    h += `<tr>
+      <td style="${labelS}">${label}</td>
+      <td style="${tdS}">${inp(field, cur)}</td>
+      <td style="${tdS}">${pfCell(pfVal)}</td>
+      <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">${cell}</td>
+    </tr>`;
+  });
+
+  // Management Fee — special with suggestion
+  const mgmtVal = e.mgmtFee || "";
+  h += `<tr>
+    <td style="${labelS}">
+      Management Fee
+      <div style="font-size:10px;color:${nearSac?'#34C759':'#0071E3'};margin-top:2px">💡 ${mgmtSuggestion.label}</div>
+    </td>
+    <td style="${tdS}">${inp("mgmtFee", mgmtVal, mgmtSuggestion.value||"0")}</td>
+    <td style="${tdS}">${pfCell(pfMgmt)}</td>
+    <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">C24</td>
+  </tr>`;
+
+  // Property Tax
+  const taxNote = askingPrice > 0 ? `$${askingPrice.toLocaleString()} × 1.025%` : "Enter purchase price on deal";
+  h += `<tr>
+    <td style="${labelS}">
+      Property Tax
+      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Pro forma: ${taxNote}</div>
+    </td>
+    <td style="${tdS}">${inp("propertyTax", e.propertyTax)}</td>
+    <td style="${tdS}">${pfCell(pfTax)}</td>
+    <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">B26/E26</td>
+  </tr>`;
+
+  // Insurance
+  h += `<tr>
+    <td style="${labelS}">
+      Insurance
+      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Pro forma: current × 1.15</div>
+    </td>
+    <td style="${tdS}">${inp("insurance", e.insurance)}</td>
+    <td style="${tdS}">${pfCell(pfIns)}</td>
+    <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">B27/E27</td>
+  </tr>`;
+
+  // Totals
+  h += `<tr style="background:rgba(0,0,0,0.02);border-top:2px solid var(--border)">
+    <td style="padding:8px 10px;font-weight:600;color:var(--text)">Total Expenses</td>
+    <td style="padding:8px 6px"><div style="${calcStyle};font-weight:600;color:var(--text)">${totalCurrent>0?"$"+Math.round(totalCurrent).toLocaleString():"—"}</div></td>
+    <td style="padding:8px 6px"><div style="${calcStyle};font-weight:600;color:var(--text)">${totalPF>0?"$"+Math.round(totalPF).toLocaleString():"—"}</div></td>
+    <td style="padding:8px 10px;font-size:10px;color:var(--text-muted);font-family:monospace;text-align:right">B28/E28</td>
+  </tr>`;
+
+  h += `</tbody></table>`;
+
+  // Below-the-line items (TI, CapEx, LC)
+  h += `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+    <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">Below-the-Line</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">`;
+
+  [["TI Budget","tiCosts","B32"],["Capital Expenditures","capEx","B33"],["Leasing Commissions","lc","B34"]].forEach(([label,field,cell])=>{
+    h += `<div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">${label} <span style="font-family:monospace;font-size:10px">${cell}</span></div>
+      ${inp(field, e[field])}
+    </div>`;
+  });
+  h += `</div></div>`;
+
+  // Save button
+  h += `<div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+    ${uwLink
+      ? `<button onclick="saveExpensesToUW('${esc(uwLink)}')" style="padding:8px 20px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">Save Expenses to UW</button>`
+      : `<div style="font-size:12px;color:var(--text-muted)">Add UW link to enable saving.</div>`}
+    <span id="exp-save-status" style="font-size:11px;color:var(--text-muted)"></span>
+  </div>`;
+
+  h += `</div>`;
+  return h;
+}
+
+// ---- SAVE EXPENSES TO UW ----
+async function saveExpensesToUW(uwUrl) {
+  const statusEl = document.getElementById("exp-save-status");
+  if (statusEl) { statusEl.textContent = "Saving..."; statusEl.style.color = "var(--text-muted)"; }
+  try {
+    const sheetId = uwUrl.match(/\/d\/([\w-]+)/)?.[1];
+    if (!sheetId) throw new Error("Could not parse sheet ID");
+    const d = state.deals.find(x => x.id === state.selectedDealDetail);
+    const e = state.expenseRows || {};
+    const askingPrice = parseFloat(d?.askingPrice) || 0;
+
+    const GENERAL_MULT = Math.pow(1.03, 4);
+    const INS_MULT = 1.15;
+    const TAX_RATE = 0.01025;
+
+    const tilcModel = state.dealDetailSynced
+      ? buildTILCModel(state.dealDetailTenants, parseFloat(d.marketRent)||0,
+          state.dealDetailAcqDate||new Date(), state.dealDetailProFormaExpenses||0, parseFloat(d.sqft)||0)
+      : null;
+    const pfGross = tilcModel ? tilcModel.annual[3].grossIncome : 0;
+    const sacAreaKeywords = ["sacramento","citrus heights","elk grove","roseville","folsom",
+      "rancho cordova","natomas","fair oaks","orangevale","antelope","lincoln","rocklin","granite bay"];
+    const nearSac = sacAreaKeywords.some(k => (d?.address||"").toLowerCase().includes(k));
+    const mgmtCurrent = parseFloat(e.mgmtFee) || (nearSac ? 6000 : pfGross * 0.05);
+    const mgmtPF = mgmtCurrent * GENERAL_MULT;
+    const pfTax = askingPrice > 0 ? askingPrice * TAX_RATE : (parseFloat(e.propertyTax)||0) * GENERAL_MULT;
+    const pfIns = (parseFloat(e.insurance)||0) * INS_MULT;
+
+    const pf = v => parseFloat(v) > 0 ? parseFloat(v) * GENERAL_MULT : "";
+
+    // Build batch update
+    const updates = [
+      { range:"'Expenses'!C18", values:[[parseFloat(e.serviceContracts)||""]] },
+      { range:"'Expenses'!C19", values:[[parseFloat(e.electricity)||""]] },
+      { range:"'Expenses'!C20", values:[[parseFloat(e.landscape)||""]] },
+      { range:"'Expenses'!C21", values:[[parseFloat(e.repairsMaint)||""]] },
+      { range:"'Expenses'!C22", values:[[parseFloat(e.janitor)||""]] },
+      { range:"'Expenses'!C23", values:[[parseFloat(e.utilities)||""]] },
+      { range:"'Expenses'!C24", values:[[mgmtCurrent||""]] },
+      { range:"'Expenses'!C25", values:[[parseFloat(e.nonReimbursable)||""]] },
+      { range:"'Expenses'!B26", values:[[parseFloat(e.propertyTax)||""]] },
+      { range:"'Expenses'!B27", values:[[parseFloat(e.insurance)||""]] },
+      // Pro forma
+      { range:"'Expenses'!E18", values:[[pf(e.serviceContracts)||""]] },
+      { range:"'Expenses'!E19", values:[[pf(e.electricity)||""]] },
+      { range:"'Expenses'!E20", values:[[pf(e.landscape)||""]] },
+      { range:"'Expenses'!E21", values:[[pf(e.repairsMaint)||""]] },
+      { range:"'Expenses'!E22", values:[[pf(e.janitor)||""]] },
+      { range:"'Expenses'!E23", values:[[pf(e.utilities)||""]] },
+      { range:"'Expenses'!E24", values:[[mgmtPF||""]] },
+      { range:"'Expenses'!E25", values:[[pf(e.nonReimbursable)||""]] },
+      { range:"'Expenses'!E26", values:[[pfTax||""]] },
+      { range:"'Expenses'!E27", values:[[pfIns||""]] },
+      // Below-the-line
+      { range:"'Expenses'!B32", values:[[parseFloat(e.tiCosts)||""]] },
+      { range:"'Expenses'!B33", values:[[parseFloat(e.capEx)||""]] },
+      { range:"'Expenses'!B34", values:[[parseFloat(e.lc)||""]] },
+    ];
+
+    const resp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`, {
+      method: "POST",
+      headers: { "Authorization":"Bearer "+state.accessToken, "Content-Type":"application/json" },
+      body: JSON.stringify({ valueInputOption:"USER_ENTERED", data: updates })
+    });
+    if (!resp.ok) throw new Error("Sheets API error: " + resp.status);
+    if (statusEl) { statusEl.textContent = "✓ Saved to UW"; statusEl.style.color = "#34C759"; setTimeout(()=>{ if(statusEl) statusEl.textContent=""; }, 3000); }
+  } catch(err) {
+    if (statusEl) { statusEl.textContent = "✗ " + err.message; statusEl.style.color = "#FF3B30"; }
+  }
+}
+
 function renderRentRollInput(d) {
   const numTenants = parseInt(d.numTenants) || 0;
   if (!numTenants) return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-sm)">
@@ -2509,6 +2751,7 @@ function renderDealDetail(d) {
   // ---- DEAL DATA TAB ----
   else if (activeTab === "data") {
     h += renderRentRollInput(d);
+    h += renderExpensesInput(d);
 
     // Tenant Timeline
     h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
@@ -2574,7 +2817,7 @@ function wireDealDetailEvents() {
 
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; state.dealDetailTab = "property"; state.rrRows = []; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; state.dealDetailTab = "property"; state.rrRows = []; state.expenseRows = null; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
@@ -2586,7 +2829,7 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; state.dealDetailTab = "property"; state.rrRows = [];
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; state.dealDetailTab = "property"; state.rrRows = []; state.expenseRows = null;
     await saveDealsToSheet(); render();
   });
 
@@ -3466,6 +3709,84 @@ function wireKPIEvents() {
     })
     .catch(e => { container.innerHTML = `<div style="color:#EF4444;font-size:11px;padding:10px">Failed to load history</div>`; });
   }
+}
+
+// ---- KPI WEEKLY SNAPSHOT ----
+const KPI_SHEET_ID = "1x-6WAGl0qjBF4ZXEVMoQuVHDdurrspN7Ksg0wma6g0k";
+const KPI_HEADERS = ["Week Of","Finding Props","Property UW","LOI Created","LOI Sent","LOI Counter","% Countered","New Broker Calls","Broker Follow Up","Deals Closed","Grade"];
+
+function calcWeekKPIs(weekStart) {
+  const weekEnd = new Date(weekStart.getTime() + 7*864e5);
+  const filterFn = (ts) => ts >= weekStart.getTime() && ts < weekEnd.getTime();
+  const filterDate = (d) => { const dt = new Date(d+"T00:00:00"); return dt >= weekStart && dt < weekEnd; };
+
+  const findingProps = state.deals.filter(d => d.createdAt && filterFn(d.createdAt)).length;
+  const propUW = state.deals.filter(d => d.uwGeneratedDate && filterFn(d.uwGeneratedDate)).length;
+  const loiCreated = state.deals.filter(d => (d.loiGeneratedDate && filterFn(d.loiGeneratedDate)) || (d.loiSentDate && filterDate(d.loiSentDate) && !d.loiGeneratedDate)).length;
+  const loiSent = state.deals.filter(d => d.loiSentDate && filterDate(d.loiSentDate)).length;
+  let newBrokerCalls = 0, followUpCalls = 0;
+  state.deals.forEach(d => {
+    (d.callLog||[]).forEach((c,i) => {
+      if (c.time && filterFn(c.time)) { if(i===0) newBrokerCalls++; else followUpCalls++; }
+    });
+  });
+  const dealsClosed = state.deals.filter(d => d.stage==="loi_accepted" && d.stageChangedDate && filterFn(d.stageChangedDate)).length;
+  const loiCounter = state.deals.filter(d => d.loiCounteredDate && filterFn(d.loiCounteredDate)).length;
+  const pctCountered = loiSent > 0 ? Math.round(loiCounter/loiSent*100) : 0;
+
+  const goals = [findingProps/KPI_GOALS.findingProperties, propUW/KPI_GOALS.propertyUW,
+    loiCreated/KPI_GOALS.loiCreated, loiSent/KPI_GOALS.loiSent,
+    newBrokerCalls/KPI_GOALS.callNewBrokers, followUpCalls/KPI_GOALS.brokerFollowUp,
+    dealsClosed/KPI_GOALS.dealsClosed].filter(v => isFinite(v));
+  const grade = goals.length ? Math.round(goals.reduce((s,v) => s+Math.min(v,1),0)/goals.length*100) : 0;
+
+  const weekLabel = weekStart.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+  return [weekLabel, findingProps, propUW, loiCreated, loiSent, loiCounter, pctCountered+"%", newBrokerCalls, followUpCalls, dealsClosed, grade+"%"];
+}
+
+async function takeKPISnapshot() {
+  if (!state.accessToken) return;
+  try {
+    // Get existing rows to check if this week is already snapshotted
+    const existing = await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1!A:A`, {
+      headers: { "Authorization": "Bearer " + state.accessToken }
+    }).then(r => r.json());
+
+    const now = new Date();
+    const weekStart = new Date(now); weekStart.setHours(0,0,0,0); weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+    const weekLabel = weekStart.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+
+    // Check if headers exist, if not write them first
+    const rows = existing.values || [];
+    if (rows.length === 0) {
+      await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1!A1:K1?valueInputOption=USER_ENTERED`, {
+        method: "PUT", headers: {"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"},
+        body: JSON.stringify({ range:"Sheet1!A1:K1", majorDimension:"ROWS", values:[KPI_HEADERS] })
+      });
+    }
+
+    // Check if this week already snapshotted
+    const alreadyDone = rows.some(r => r[0] === weekLabel);
+    if (alreadyDone) return;
+
+    // Append snapshot row
+    const kpiRow = calcWeekKPIs(weekStart);
+    await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1%21A%3AK:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+      method: "POST", headers: {"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"},
+      body: JSON.stringify({ range:"Sheet1!A:K", majorDimension:"ROWS", values:[kpiRow] })
+    });
+    console.log("KPI snapshot saved for week of", weekLabel);
+  } catch(e) { console.error("KPI snapshot failed:", e); }
+}
+
+// Check every 5 minutes — trigger Sunday 11pm–11:59pm
+function startKPISnapshotTimer() {
+  setInterval(() => {
+    const now = new Date();
+    if (now.getDay() === 0 && now.getHours() === 23) {
+      takeKPISnapshot();
+    }
+  }, 5 * 60 * 1000);
 }
 
 // ---- INIT ----
