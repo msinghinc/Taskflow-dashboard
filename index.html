@@ -506,6 +506,10 @@ let state = {
   dealDetailEquityIn: 0,
   dealDetailAcqDate: null,
   dealDetailFinTab: "overview",
+  dealDetailTab: "property",
+  rrRentMode: "annual",
+  rrRecMode: "annual",
+  rrRows: [],
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -2212,6 +2216,162 @@ function renderFinancialAnalysis(d) {
   </div>`;
 }
 
+// ---- RENT ROLL INPUT ----
+function renderRentRollInput(d) {
+  const numTenants = parseInt(d.numTenants) || 0;
+  if (!numTenants) return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-sm)">
+    <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:6px">Rent Roll</div>
+    <div style="font-size:13px;color:var(--text-muted)">Set number of tenants in the deal info to generate rent roll rows.</div>
+  </div>`;
+
+  const uwLink = d.uwLink || "";
+  const rentMode = state.rrRentMode || "annual"; // "annual" or "monthly"
+  const recMode  = state.rrRecMode  || "annual";
+  const savedRows = state.rrRows || [];
+
+  // Init rows if needed
+  if (savedRows.length !== numTenants) {
+    state.rrRows = Array.from({length: numTenants}, (_, i) => savedRows[i] || {
+      creditType:"", name:"", suite:"", gla:"", leaseStart:"", leaseEnd:"",
+      annualRent:"", monthlyRent:"", annualRec:"", monthlyRec:""
+    });
+  }
+  const rows = state.rrRows;
+  const totalGLA = rows.reduce((s,r) => s + (parseFloat(r.gla)||0), 0);
+  const totalRevenue = rows.reduce((s,r) => s + (parseFloat(r.annualRent)||0), 0);
+
+  const creditOpts = ["","National","Regional","Local","Mom & Pop"];
+  const thStyle = `padding:8px 6px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap;border-bottom:1px solid var(--border);text-align:left`;
+  const tdStyle = `padding:4px 4px`;
+  const inStyle = `width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:6px;font-size:11px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif`;
+  const calcStyle = `width:100%;padding:5px 6px;border:1px solid transparent;border-radius:6px;font-size:11px;background:rgba(0,0,0,0.03);color:var(--text-muted);font-family:'Inter',sans-serif`;
+
+  let h = `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:20px;margin-bottom:16px;box-shadow:var(--shadow-sm)">`;
+  h += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+    <div style="font-size:17px;font-weight:600;color:var(--text);letter-spacing:-0.3px">Rent Roll <span style="font-size:12px;font-weight:400;color:var(--text-muted)">${numTenants} tenants</span></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:4px;align-items:center;font-size:11px;color:var(--text-muted)">
+        Rent:
+        <button onclick="state.rrRentMode='annual';document.getElementById('rr-input-wrap').outerHTML=renderRentRollInput(state.deals.find(x=>x.id===state.selectedDealDetail))" style="padding:3px 10px;border-radius:20px;border:none;cursor:pointer;font-size:11px;font-family:'Inter',sans-serif;background:${rentMode==='annual'?'var(--bg-dark)':'var(--bg)'};color:${rentMode==='annual'?'#fff':'var(--text-secondary)'}">Annual</button>
+        <button onclick="state.rrRentMode='monthly';document.getElementById('rr-input-wrap').outerHTML=renderRentRollInput(state.deals.find(x=>x.id===state.selectedDealDetail))" style="padding:3px 10px;border-radius:20px;border:none;cursor:pointer;font-size:11px;font-family:'Inter',sans-serif;background:${rentMode==='monthly'?'var(--bg-dark)':'var(--bg)'};color:${rentMode==='monthly'?'#fff':'var(--text-secondary)'}">Monthly</button>
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;font-size:11px;color:var(--text-muted)">
+        Recovery:
+        <button onclick="state.rrRecMode='annual';document.getElementById('rr-input-wrap').outerHTML=renderRentRollInput(state.deals.find(x=>x.id===state.selectedDealDetail))" style="padding:3px 10px;border-radius:20px;border:none;cursor:pointer;font-size:11px;font-family:'Inter',sans-serif;background:${recMode==='annual'?'var(--bg-dark)':'var(--bg)'};color:${recMode==='annual'?'#fff':'var(--text-secondary)'}">Annual</button>
+        <button onclick="state.rrRecMode='monthly';document.getElementById('rr-input-wrap').outerHTML=renderRentRollInput(state.deals.find(x=>x.id===state.selectedDealDetail))" style="padding:3px 10px;border-radius:20px;border:none;cursor:pointer;font-size:11px;font-family:'Inter',sans-serif;background:${recMode==='monthly'?'var(--bg-dark)':'var(--bg)'};color:${recMode==='monthly'?'#fff':'var(--text-secondary)'}">Monthly</button>
+      </div>
+    </div>
+  </div>`;
+
+  h += `<div id="rr-input-wrap" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:900px">
+  <thead><tr>
+    <th style="${thStyle}">Credit</th>
+    <th style="${thStyle}">Tenant Name</th>
+    <th style="${thStyle}">Suite</th>
+    <th style="${thStyle}">GLA (SF)</th>
+    <th style="${thStyle}">% SF</th>
+    <th style="${thStyle}">Lease Start</th>
+    <th style="${thStyle}">Lease End</th>
+    <th style="${thStyle}">${rentMode==='annual'?'Annual Rent':'Monthly Rent'}</th>
+    <th style="${thStyle}">${rentMode==='annual'?'Monthly':'Annual'}</th>
+    <th style="${thStyle}">$/SF</th>
+    <th style="${thStyle}">${recMode==='annual'?'Annual Rec':'Monthly Rec'}</th>
+    <th style="${thStyle}">${recMode==='annual'?'Monthly Rec':'Annual Rec'}</th>
+    <th style="${thStyle}">Rec/SF</th>
+    <th style="${thStyle}">Gross Income</th>
+    <th style="${thStyle}">% Rev</th>
+    <th style="${thStyle}">Yrs Left</th>
+  </tr></thead><tbody>`;
+
+  rows.forEach((r, i) => {
+    const gla = parseFloat(r.gla) || 0;
+    const pctSF = totalGLA > 0 && gla ? (gla/totalGLA*100).toFixed(1)+"%" : "—";
+
+    // Rent calcs
+    const annualRent = rentMode === 'annual'
+      ? (parseFloat(r.annualRent) || 0)
+      : (parseFloat(r.monthlyRent) || 0) * 12;
+    const monthlyRent = annualRent / 12;
+    const rentPsf = gla > 0 && annualRent ? (annualRent/gla).toFixed(2) : "—";
+
+    // Recovery calcs
+    const annualRec = recMode === 'annual'
+      ? (parseFloat(r.annualRec) || 0)
+      : (parseFloat(r.monthlyRec) || 0) * 12;
+    const monthlyRec = annualRec / 12;
+    const recPsf = gla > 0 && annualRec ? (annualRec/gla).toFixed(2) : "—";
+
+    const grossIncome = annualRent + annualRec;
+    const pctRev = totalRevenue > 0 && annualRent ? (annualRent/totalRevenue*100).toFixed(1)+"%" : "—";
+
+    // Lease years remaining
+    let yrsLeft = "—";
+    const leEnd = (r.leaseEnd||"").toString().trim();
+    if (leEnd.toUpperCase() === "MTM") {
+      yrsLeft = "1/12";
+    } else {
+      const parsed = parseLeaseDate(leEnd);
+      if (parsed) {
+        const now = new Date();
+        const months = (parsed.year - now.getFullYear()) * 12 + (parsed.month - now.getMonth());
+        yrsLeft = months > 0 ? (months/12).toFixed(2) : "0";
+      }
+    }
+
+    const inp = (field, val, placeholder="") =>
+      `<input type="text" data-rr-row="${i}" data-rr-field="${field}" value="${esc(String(val||""))}" placeholder="${placeholder}" style="${inStyle}" oninput="state.rrRows[${i}]['${field}']=this.value">`;
+
+    h += `<tr style="border-bottom:1px solid var(--border-light)">
+      <td style="${tdStyle}">
+        <select data-rr-row="${i}" data-rr-field="creditType" style="${inStyle}" onchange="state.rrRows[${i}].creditType=this.value">
+          ${creditOpts.map(o=>`<option value="${o}" ${r.creditType===o?"selected":""}>${o||"—"}</option>`).join("")}
+        </select>
+      </td>
+      <td style="${tdStyle}">${inp("name", r.name, "Tenant name")}</td>
+      <td style="${tdStyle}">${inp("suite", r.suite, "A")}</td>
+      <td style="${tdStyle}">${inp("gla", r.gla, "1200")}</td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${pctSF}</div></td>
+      <td style="${tdStyle}">${inp("leaseStart", r.leaseStart, "YYYY-MM-DD")}</td>
+      <td style="${tdStyle}">${inp("leaseEnd", r.leaseEnd, "YYYY-MM-DD or MTM")}</td>
+      <td style="${tdStyle}">${rentMode==='annual' ? inp("annualRent", r.annualRent, "24000") : inp("monthlyRent", r.monthlyRent, "2000")}</td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${rentMode==='annual' ? (monthlyRent>0?"$"+Math.round(monthlyRent):"—") : (annualRent>0?"$"+Math.round(annualRent):"—")}</div></td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${rentPsf!=="—"?"$"+rentPsf:"—"}</div></td>
+      <td style="${tdStyle}">${recMode==='annual' ? inp("annualRec", r.annualRec, "0") : inp("monthlyRec", r.monthlyRec, "0")}</td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${recMode==='annual' ? (monthlyRec>0?"$"+Math.round(monthlyRec):"—") : (annualRec>0?"$"+Math.round(annualRec):"—")}</div></td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${recPsf!=="—"?"$"+recPsf:"—"}</div></td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${grossIncome>0?"$"+Math.round(grossIncome).toLocaleString():"—"}</div></td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${pctRev}</div></td>
+      <td style="${tdStyle}"><div style="${calcStyle}">${yrsLeft}</div></td>
+    </tr>`;
+  });
+
+  h += `</tbody></table></div>`;
+
+  // Totals row
+  const totalAnnualRent = rows.reduce((s,r) => {
+    return s + (rentMode==='annual' ? (parseFloat(r.annualRent)||0) : (parseFloat(r.monthlyRent)||0)*12);
+  }, 0);
+  const totalAnnualRec = rows.reduce((s,r) => {
+    return s + (recMode==='annual' ? (parseFloat(r.annualRec)||0) : (parseFloat(r.monthlyRec)||0)*12);
+  }, 0);
+
+  h += `<div style="display:flex;gap:20px;margin-top:12px;padding:12px 6px;border-top:1px solid var(--border);font-size:12px;flex-wrap:wrap">
+    <span style="color:var(--text-muted)">Total GLA: <strong style="color:var(--text)">${fmtNum(Math.round(totalGLA))} SF</strong></span>
+    <span style="color:var(--text-muted)">Total Rent: <strong style="color:var(--text)">${fmt$(totalAnnualRent)}/yr</strong></span>
+    <span style="color:var(--text-muted)">Total Recovery: <strong style="color:var(--text)">${fmt$(totalAnnualRec)}/yr</strong></span>
+    <span style="color:var(--text-muted)">Gross Revenue: <strong style="color:var(--text)">${fmt$(totalAnnualRent+totalAnnualRec)}/yr</strong></span>
+  </div>`;
+
+  // Save button
+  h += `<div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+    ${uwLink ? `<button onclick="saveRentRollToUW('${esc(uwLink)}')" style="padding:8px 20px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">Save to UW</button>` : `<div style="font-size:12px;color:var(--text-muted)">Add UW link to deal to enable saving.</div>`}
+    <span id="rr-save-status" style="font-size:11px;color:var(--text-muted)"></span>
+  </div>`;
+
+  h += `</div>`;
+  return h;
+}
+
 function renderDealDetail(d) {
   const s = stg(d.stage);
   const p = pri(d.priority);
@@ -2220,11 +2380,17 @@ function renderDealDetail(d) {
   const ptMap = { stnnn:"Single Tenant NNN", multi:"Multi-Tenant Retail", industrial:"Industrial", outparcel:"Outparcel", other:"Other" };
   const condOpts = ["","Excellent","Good","Fair","Poor"];
   const tenants = state.dealDetailTenants;
+  const activeTab = state.dealDetailTab || "property";
 
-  let h = `<div style="max-width:1100px;margin:0 auto;padding-bottom:40px">`;
+  function mainTab(id, label) {
+    const active = activeTab === id;
+    return `<button onclick="state.dealDetailTab='${id}';render()" style="padding:8px 20px;border-radius:20px;font-size:13px;cursor:pointer;border:none;background:${active?'var(--bg-dark)':'transparent'};color:${active?'#fff':'var(--text-secondary)'};font-weight:${active?'600':'400'};font-family:'Inter',sans-serif;transition:all 0.15s">${label}</button>`;
+  }
+
+  let h = `<div style="max-width:1100px;margin:0 auto;padding-bottom:80px">`;
 
   // Header bar
-  h += `<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+  h += `<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
     <button data-action="deal-back" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text);font-family:'Inter',sans-serif">← Back</button>
     <div style="flex:1">
       <div style="font-family:'Inter',sans-serif;font-size:22px;font-weight:800;color:var(--text)">${esc(d.name)}</div>
@@ -2235,140 +2401,147 @@ function renderDealDetail(d) {
     ${sc ? `<span class="td-score" style="color:${scoreColor(sc)};background:${scoreBg(sc)}">${sc}/10</span>` : ""}
   </div>`;
 
-  // Info grid
-  const dom = d.listingDate ? Math.floor((Date.now() - new Date(d.listingDate+"T00:00:00").getTime()) / 864e5) : null;
-  h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">`;
-  [["Asking Price",fmt$(d.askingPrice)],["NOI",fmt$(d.noi)],["Cap Rate",d.capRate?d.capRate+"%":"—"],
-   ["Sq Ft",d.sqft?fmtNum(d.sqft):"—"],["Price/SF",priceSf],["Acreage",d.acreage||"—"],
-   ["# Tenants",d.numTenants||"—"],["WALT",d.walt||"—"],["Type",ptMap[d.propertyType]||"—"],
-   ["VPD",d.vehiclesPerDay?fmtNum(d.vehiclesPerDay):"—"],["3mi Pop",d.pop3mi?fmtNum(d.pop3mi):"—"],["3mi AHI",d.ahi3mi?fmt$(d.ahi3mi):"—"],
-   ["Listing Date",d.listingDate||"—"],["Listing Status",d.listingStatus||"—"],["Days on Market",dom!==null?dom+"d":"—"]
-  ].forEach(([l,v])=>{h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">${l}</div><div style="font-size:14px;font-weight:700;color:var(--text)">${v}</div></div>`;});
-  h += `</div></div>`;
+  // Main tabs
+  h += `<div style="display:flex;background:rgba(0,0,0,0.04);border-radius:24px;padding:4px;gap:2px;margin-bottom:20px;width:fit-content">
+    ${mainTab("property","Property Info")}
+    ${mainTab("data","Deal Data")}
+    ${mainTab("analysis","Analysis")}
+  </div>`;
 
-  // Links row
-  const links=[];
-  if(d.listingLink){const src=d.listingLink.includes("crexi")?"Crexi":d.listingLink.includes("costar")?"CoStar":"Listing";links.push({label:src,url:d.listingLink,color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"});}
-  if(d.uwLink)links.push({label:"UW",url:d.uwLink,color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"});
-  if(d.costarLink)links.push({label:"CoStar",url:d.costarLink,color:"#0EA5E9",bg:"#F0F9FF",border:"#BAE6FD"});
-  if(d.loiLink)links.push({label:"LOI",url:d.loiLink,color:"#16A34A",bg:"#F0FDF4",border:"#BBF7D0"});
-  if(d.sfLoiLink)links.push({label:"SF LOI",url:d.sfLoiLink,color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"});
-  if(d.omLink)links.push({label:"OM",url:d.omLink,color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"});
-  if(links.length){h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">`;links.forEach(l=>{h+=`<a href="${esc(l.url)}" target="_blank" style="padding:6px 14px;background:${l.bg};border:1px solid ${l.border};border-radius:8px;font-size:12px;color:${l.color};text-decoration:none;font-weight:600">🔗 ${l.label}</a>`;});h+=`</div>`;}
+  // ---- PROPERTY INFO TAB ----
+  if (activeTab === "property") {
+    // Info grid
+    const dom = d.listingDate ? Math.floor((Date.now() - new Date(d.listingDate+"T00:00:00").getTime()) / 864e5) : null;
+    h += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">`;
+    [["Asking Price",fmt$(d.askingPrice)],["NOI",fmt$(d.noi)],["Cap Rate",d.capRate?d.capRate+"%":"—"],
+     ["Sq Ft",d.sqft?fmtNum(d.sqft):"—"],["Price/SF",priceSf],["Acreage",d.acreage||"—"],
+     ["# Tenants",d.numTenants||"—"],["WALT",d.walt||"—"],["Type",ptMap[d.propertyType]||"—"],
+     ["VPD",d.vehiclesPerDay?fmtNum(d.vehiclesPerDay):"—"],["3mi Pop",d.pop3mi?fmtNum(d.pop3mi):"—"],["3mi AHI",d.ahi3mi?fmt$(d.ahi3mi):"—"],
+     ["Listing Date",d.listingDate||"—"],["Listing Status",d.listingStatus||"—"],["Days on Market",dom!==null?dom+"d":"—"]
+    ].forEach(([l,v])=>{h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">${l}</div><div style="font-size:14px;font-weight:700;color:var(--text)">${v}</div></div>`;});
+    h += `</div></div>`;
 
-  // Scorecard
-  h += renderScorecard(d, tenants);
+    // Links row
+    const links=[];
+    if(d.listingLink){const src=d.listingLink.includes("crexi")?"Crexi":d.listingLink.includes("costar")?"CoStar":"Listing";links.push({label:src,url:d.listingLink,color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"});}
+    if(d.uwLink)links.push({label:"UW",url:d.uwLink,color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"});
+    if(d.costarLink)links.push({label:"CoStar",url:d.costarLink,color:"#0EA5E9",bg:"#F0F9FF",border:"#BAE6FD"});
+    if(d.loiLink)links.push({label:"LOI",url:d.loiLink,color:"#16A34A",bg:"#F0FDF4",border:"#BBF7D0"});
+    if(d.sfLoiLink)links.push({label:"SF LOI",url:d.sfLoiLink,color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"});
+    if(d.omLink)links.push({label:"OM",url:d.omLink,color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"});
+    if(links.length){h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">`;links.forEach(l=>{h+=`<a href="${esc(l.url)}" target="_blank" style="padding:6px 14px;background:${l.bg};border:1px solid ${l.border};border-radius:8px;font-size:12px;color:${l.color};text-decoration:none;font-weight:600">🔗 ${l.label}</a>`;});h+=`</div>`;}
 
-  // Analysis Summary
-  h += `<div id="deal-analysis-summary">` + renderDealSummary(d, tenants) + `</div>`;
-
-  // How to Counter → Financial Analysis
-  h += `<div id="deal-how-to-counter">` + renderFinancialAnalysis(d) + `</div>`;
-
-  // Broker section
-  if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
-    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Broker</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-        <div>
-          ${d.broker?`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(d.broker)}</div>`:""}
-          ${d.brokerContact?`<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${esc(d.brokerContact)}</div>`:""}
-          <div style="display:flex;gap:16px;margin-top:6px;font-size:12px;color:var(--text-secondary)">
-            ${d.brokerPhone?`<span>📞 ${esc(d.brokerPhone)}</span>`:""}
-            ${d.brokerEmail?`<span>✉ ${esc(d.brokerEmail)}</span>`:""}
+    // Broker section
+    if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
+      h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+        <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Broker</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+          <div>
+            ${d.broker?`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(d.broker)}</div>`:""}
+            ${d.brokerContact?`<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${esc(d.brokerContact)}</div>`:""}
+            <div style="display:flex;gap:16px;margin-top:6px;font-size:12px;color:var(--text-secondary)">
+              ${d.brokerPhone?`<span>📞 ${esc(d.brokerPhone)}</span>`:""}
+              ${d.brokerEmail?`<span>✉ ${esc(d.brokerEmail)}</span>`:""}
+            </div>
+            <div style="margin-top:8px"><span style="font-size:10px;padding:3px 8px;border-radius:4px;background:${d.brokerReached?"#DCFCE7":"#FEF2F2"};color:${d.brokerReached?"#16A34A":"#DC2626"};font-weight:600">${d.brokerReached?"✓ Reached":"Not Reached"}</span></div>
           </div>
-          <div style="margin-top:8px"><span style="font-size:10px;padding:3px 8px;border-radius:4px;background:${d.brokerReached?"#DCFCE7":"#FEF2F2"};color:${d.brokerReached?"#16A34A":"#DC2626"};font-weight:600">${d.brokerReached?"✓ Reached":"Not Reached"}</span></div>
+          ${d.brokerEmail?`<a href="mailto:${esc(d.brokerEmail)}?subject=RE: ${esc(d.name)}" style="padding:8px 16px;background:var(--bg-dark);color:#fff;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none">✉ Email Broker</a>`:""}
         </div>
-        ${d.brokerEmail?`<a href="mailto:${esc(d.brokerEmail)}?subject=RE: ${esc(d.name)}" style="padding:8px 16px;background:var(--bg-dark);color:#fff;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none">✉ Email Broker</a>`:""}
+      </div>`;
+    }
+
+    // Call Log
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Call Log${d.callLog&&d.callLog.length?" ("+d.callLog.length+")":""}</div>
+        <button data-action="deal-log-call" style="padding:6px 14px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">+ Log Call</button>
+      </div>`;
+    if(d.callLog&&d.callLog.length){
+      h+=`<div style="max-height:240px;overflow-y:auto">`;
+      [...d.callLog].reverse().forEach(c=>{
+        const date=c.time?new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):"";
+        const statusColor=c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"||c.status==="Wrong Number"?"#EF4444":"#64748B";
+        h+=`<div style="padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="color:var(--text-muted);min-width:80px">${date}</span>
+            <span style="color:${statusColor};font-weight:700">${esc(c.status||"Called")}</span>
+          </div>
+          ${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:4px;padding-left:88px">${esc(c.note)}</div>`:""}
+        </div>`;
+      });
+      h+=`</div>`;
+    } else {h+=`<div style="color:var(--text-muted);font-size:12px;padding:12px 0">No calls logged yet.</div>`;}
+    h+=`</div>`;
+
+    // Property Condition
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Property Condition</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">`;
+    [["propertyCondition","Overall","select"],["roofCondition","Roof","select"],["parkingCondition","Parking","select"],["hvacCondition","HVAC","select"],
+     ["deferredMaint","Deferred Maint ($)","number"],["envConcerns","Environmental Concerns","text"]
+    ].forEach(([field,label,type])=>{
+      h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">${label}</div>`;
+      if(type==="select"){
+        h+=`<select data-cond-field="${field}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">`;
+        condOpts.forEach(o=>{h+=`<option value="${o}" ${(d[field]||"").toLowerCase()===o.toLowerCase()?"selected":""}>${o||"— Select —"}</option>`;});
+        h+=`</select>`;
+      } else {
+        h+=`<input type="${type}" data-cond-field="${field}" value="${esc(String(d[field]||""))}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">`;
+      }
+      h+=`</div>`;
+    });
+    h+=`</div><div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light)">
+      <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px">Age (Years)</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">`;
+    [["roofAge","Roof"],["hvacAge","HVAC"],["parkingAge","Parking"]].forEach(([field,label])=>{
+      h+=`<div><div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">${label}</div>
+      <input type="number" data-cond-field="${field}" value="${esc(String(d[field]||""))}" placeholder="e.g. 8" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif"></div>`;
+    });
+    h+=`</div></div>
+      <button data-action="deal-save-condition" style="margin-top:14px;padding:7px 18px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">Save Condition</button>
+    </div>`;
+
+    // Notes
+    if(d.notes){h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px"><div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Notes</div><div style="font-size:13px;color:var(--text-secondary);line-height:1.6">${esc(d.notes)}</div></div>`;}
+  }
+
+  // ---- DEAL DATA TAB ----
+  else if (activeTab === "data") {
+    h += renderRentRollInput(d);
+
+    // Tenant Timeline
+    h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Tenant Timeline${tenants.length?" ("+tenants.length+")":""}</div>
+        ${d.uwLink?`<button data-action="deal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">${tenants.length?"Re-sync from UW":"Sync from UW"}</button>`:""}
       </div>
+      <div id="deal-tenants-container">${tenants.length?renderTenantTimeline(tenants):"<div style='color:var(--text-muted);font-size:12px'>Click Sync from UW to load tenant data.</div>"}</div>
     </div>`;
   }
 
-  // Call Log
-  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Call Log${d.callLog&&d.callLog.length?" ("+d.callLog.length+")":""}</div>
-      <button data-action="deal-log-call" style="padding:6px 14px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">+ Log Call</button>
-    </div>`;
-  if(d.callLog&&d.callLog.length){
-    h+=`<div style="max-height:240px;overflow-y:auto">`;
-    [...d.callLog].reverse().forEach(c=>{
-      const date=c.time?new Date(c.time).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):"";
-      const statusColor=c.status==="Broker Sending Info"?"#10B981":c.status==="Deal Sold"||c.status==="Wrong Number"?"#EF4444":"#64748B";
-      h+=`<div style="padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="color:var(--text-muted);min-width:80px">${date}</span>
-          <span style="color:${statusColor};font-weight:700">${esc(c.status||"Called")}</span>
-        </div>
-        ${c.note?`<div style="font-size:11px;color:var(--text-muted);margin-top:4px;padding-left:88px">${esc(c.note)}</div>`:""}
-      </div>`;
-    });
-    h+=`</div>`;
-  } else {h+=`<div style="color:var(--text-muted);font-size:12px;padding:12px 0">No calls logged yet.</div>`;}
-  h+=`</div>`;
+  // ---- ANALYSIS TAB ----
+  else if (activeTab === "analysis") {
+    h += renderScorecard(d, tenants);
+    h += `<div id="deal-analysis-summary">` + renderDealSummary(d, tenants) + `</div>`;
+    h += `<div id="deal-how-to-counter">` + renderFinancialAnalysis(d) + `</div>`;
+  }
 
-  // Property Condition
-  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Property Condition</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">`;
-  [["propertyCondition","Overall","select"],["roofCondition","Roof","select"],["parkingCondition","Parking","select"],["hvacCondition","HVAC","select"],
-   ["deferredMaint","Deferred Maint ($)","number"],["envConcerns","Environmental Concerns","text"]
-  ].forEach(([field,label,type])=>{
-    h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">${label}</div>`;
-    if(type==="select"){
-      h+=`<select data-cond-field="${field}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">`;
-      condOpts.forEach(o=>{h+=`<option value="${o}" ${(d[field]||"").toLowerCase()===o.toLowerCase()?"selected":""}>${o||"— Select —"}</option>`;});
-      h+=`</select>`;
-    } else {
-      h+=`<input type="${type}" data-cond-field="${field}" value="${esc(String(d[field]||""))}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">`;
-    }
-    h+=`</div>`;
-  });
-  // Age fields
-  h+=`</div><div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light)">
-    <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px">Age (Years)</div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">`;
-  [["roofAge","Roof"],["hvacAge","HVAC"],["parkingAge","Parking"]].forEach(([field,label])=>{
-    h+=`<div><div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">${label}</div>
-    <input type="number" data-cond-field="${field}" value="${esc(String(d[field]||""))}" placeholder="e.g. 8" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif"></div>`;
-  });
-  h+=`</div></div>
-    <button data-action="deal-save-condition" style="margin-top:14px;padding:7px 18px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">Save Condition</button>
-  </div>`;
-
-  // Tenant Timeline
-  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Tenants${tenants.length?" ("+tenants.length+")":""}</div>
-      ${d.uwLink?`<button data-action="deal-sync-tenants" data-uw="${esc(d.uwLink)}" style="padding:5px 12px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;color:#D97706;font-size:10px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">${tenants.length?"Re-sync from UW":"View Tenants"}</button>`:""}
-    </div>
-    <div id="deal-tenants-container">${tenants.length?renderTenantTimeline(tenants):"<div style='color:var(--text-muted);font-size:12px'>Click View Tenants to sync from UW.</div>"}</div>
-  </div>`;
-
-  // Notes
-  if(d.notes){h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px"><div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">Notes</div><div style="font-size:13px;color:var(--text-secondary);line-height:1.6">${esc(d.notes)}</div></div>`;}
-
-  // Action buttons
-  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:8px">`;
+  // Action buttons — always visible at bottom
+  h+=`<div style="position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:1px solid var(--border);padding:12px 24px;display:flex;gap:8px;flex-wrap:wrap;z-index:100">`;
   STAGES.forEach(stg=>{h+=`<button data-action="deal-set-stage" data-value="${stg.id}" style="padding:6px 12px;border:1px solid ${d.stage===stg.id?stg.color:"var(--border)"};border-radius:8px;font-size:11px;cursor:pointer;background:${d.stage===stg.id?stg.color+"15":"var(--bg-card)"};color:${d.stage===stg.id?stg.color:"var(--text-muted)"};font-weight:600;font-family:'Inter',sans-serif">${stg.label}</button>`;});
   h+=`<button data-action="deal-remove" style="margin-left:auto;padding:6px 14px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;font-size:11px;cursor:pointer;color:#EF4444;font-weight:600;font-family:'Inter',sans-serif">✕ Remove Deal</button>`;
   h+=`</div>`;
 
-  // Call log overlay (hidden by default)
+  // Call log overlay
   h+=`<div id="call-log-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
     <div style="background:var(--bg-card);border-radius:14px;padding:28px;width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
       <div style="font-family:'Inter',sans-serif;font-size:17px;font-weight:800;margin-bottom:18px">Log a Call</div>
       <div style="margin-bottom:12px">
         <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">STATUS</div>
         <select id="call-status-input" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">
-          <option>Called — No Answer</option>
-          <option>Left Voicemail</option>
-          <option>Broker Sending Info</option>
-          <option>Not Interested</option>
-          <option>Deal Sold</option>
-          <option>Wrong Number</option>
-          <option>Other</option>
+          <option>Called — No Answer</option><option>Left Voicemail</option><option>Broker Sending Info</option>
+          <option>Not Interested</option><option>Deal Sold</option><option>Wrong Number</option><option>Other</option>
         </select>
       </div>
       <div style="margin-bottom:18px">
@@ -2401,7 +2574,7 @@ function wireDealDetailEvents() {
 
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; state.dealDetailTab = "property"; state.rrRows = []; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
@@ -2413,7 +2586,7 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview";
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailProFormaExpenses = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; state.dealDetailTab = "property"; state.rrRows = [];
     await saveDealsToSheet(); render();
   });
 
@@ -2575,6 +2748,73 @@ function wireDealDetailEvents() {
 }
 
 // ---- EVENT WIRING ----
+// ---- SAVE RENT ROLL TO UW ----
+async function saveRentRollToUW(uwUrl) {
+  const statusEl = document.getElementById("rr-save-status");
+  if (statusEl) statusEl.textContent = "Saving...";
+  try {
+    const sheetId = uwUrl.match(/\/d\/([\w-]+)/)?.[1];
+    if (!sheetId) throw new Error("Could not parse sheet ID from UW link");
+    const rows = state.rrRows || [];
+    const rentMode = state.rrRentMode || "annual";
+    const recMode  = state.rrRecMode  || "annual";
+    const totalGLA = rows.reduce((s,r) => s+(parseFloat(r.gla)||0), 0);
+    const totalRevenue = rows.reduce((s,r) => {
+      return s + (rentMode==='annual' ? (parseFloat(r.annualRent)||0) : (parseFloat(r.monthlyRent)||0)*12);
+    }, 0);
+
+    const values = rows.map(r => {
+      const gla = parseFloat(r.gla) || 0;
+      const annualRent = rentMode==='annual' ? (parseFloat(r.annualRent)||0) : (parseFloat(r.monthlyRent)||0)*12;
+      const monthlyRent = annualRent / 12;
+      const rentPsf = gla > 0 && annualRent ? annualRent/gla : 0;
+      const annualRec = recMode==='annual' ? (parseFloat(r.annualRec)||0) : (parseFloat(r.monthlyRec)||0)*12;
+      const monthlyRec = annualRec / 12;
+      const recPsf = gla > 0 && annualRec ? annualRec/gla : 0;
+      const grossIncome = annualRent + annualRec;
+      const pctSF = totalGLA > 0 && gla ? gla/totalGLA : 0;
+      const pctRev = totalRevenue > 0 && annualRent ? annualRent/totalRevenue : 0;
+
+      // Lease years remaining
+      const leEnd = (r.leaseEnd||"").toString().trim();
+      let yrsLeft = "";
+      if (leEnd.toUpperCase() === "MTM") {
+        yrsLeft = "1/12";
+      } else {
+        const parsed = parseLeaseDate(leEnd);
+        if (parsed) {
+          const now = new Date();
+          const months = (parsed.year - now.getFullYear()) * 12 + (parsed.month - now.getMonth());
+          yrsLeft = months > 0 ? (months/12).toFixed(2) : "0";
+        }
+      }
+
+      // Col A=creditType, B=name, C=suite, D=GLA, E=%SF, F=start, G=end,
+      // H=annualRent, I=monthly, J=$/SF, K=annualRec, L=monthlyRec, M=recPsf,
+      // N=grossIncome, O=%revenue, P=yrsLeft
+      return [
+        r.creditType||"", r.name||"", r.suite||"", gla||"",
+        pctSF ? (pctSF*100).toFixed(2)+"%" : "",
+        r.leaseStart||"", r.leaseEnd||"",
+        annualRent||"", monthlyRent?monthlyRent.toFixed(2):"", rentPsf?rentPsf.toFixed(2):"",
+        annualRec||"", monthlyRec?monthlyRec.toFixed(2):"", recPsf?recPsf.toFixed(2):"",
+        grossIncome||"", pctRev?(pctRev*100).toFixed(2)+"%":"", yrsLeft
+      ];
+    });
+
+    const range = `'Rent Roll'!A14:P${13+rows.length}`;
+    const resp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`, {
+      method: "PUT",
+      headers: { "Authorization": "Bearer "+state.accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ range, majorDimension: "ROWS", values })
+    });
+    if (!resp.ok) throw new Error("Sheets API error: " + resp.status);
+    if (statusEl) { statusEl.textContent = "✓ Saved to UW"; statusEl.style.color = "#34C759"; setTimeout(()=>{ if(statusEl) statusEl.textContent=""; }, 3000); }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = "✗ " + e.message; statusEl.style.color = "#FF3B30"; }
+  }
+}
+
 function wireEvents() {
   // Deal card clicks (kanban)
   document.querySelectorAll(".k-card[data-deal-id]").forEach(card => {
