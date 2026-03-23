@@ -874,9 +874,23 @@ async function loadDeals() {
       obj.propertyCondition = obj.propertyCondition || "";
       obj.roofCondition = obj.roofCondition || "";
       obj.parkingCondition = obj.parkingCondition || "";
-      obj.hvacNotes = obj.hvacNotes || "";
+      obj.hvacCondition = obj.hvacCondition || "";
+      obj.roofAge = parseFloat(obj.roofAge) || 0;
+      obj.hvacAge = parseFloat(obj.hvacAge) || 0;
+      obj.parkingAge = parseFloat(obj.parkingAge) || 0;
       obj.deferredMaint = parseFloat(obj.deferredMaint) || 0;
       obj.envConcerns = obj.envConcerns || "";
+      obj.locationType = obj.locationType || "";
+      obj.shadowAnchor = obj.shadowAnchor === "true" || obj.shadowAnchor === true;
+      obj.shadowAnchorName = obj.shadowAnchorName || "";
+      obj.coTenancy = obj.coTenancy || "";
+      obj.marketRent = parseFloat(obj.marketRent) || 0;
+      obj.pop1mi = parseFloat(obj.pop1mi) || 0;
+      obj.ahi1mi = parseFloat(obj.ahi1mi) || 0;
+      obj.pop5mi = parseFloat(obj.pop5mi) || 0;
+      obj.ahi5mi = parseFloat(obj.ahi5mi) || 0;
+      obj.popGrowthRate = parseFloat(obj.popGrowthRate) || 0;
+      obj.daytimePopulation = parseFloat(obj.daytimePopulation) || 0;
       return obj;
     });
   } else { state.deals = []; }
@@ -1178,10 +1192,33 @@ function calcPhysicalScore(d) {
   if (!d.propertyCondition) return null;
   const condMap = { excellent:9, good:7, fair:5, poor:3 };
   let score = condMap[d.propertyCondition.toLowerCase()] || 5;
-  if (d.roofCondition) score += 0.5;
-  if (d.parkingCondition) score += 0.5;
+
+  // Age scoring helper — % of useful life remaining
+  function ageAdj(age, usefulLife) {
+    if (!age) return 0;
+    const pctRemaining = Math.max(0, (usefulLife - age) / usefulLife);
+    if (pctRemaining > 0.75) return 1;
+    if (pctRemaining > 0.5) return 0;
+    if (pctRemaining > 0.25) return -0.5;
+    if (pctRemaining > 0) return -1.5;
+    return -3; // exceeded useful life
+  }
+
+  // Roof condition + age (25yr useful life)
+  if (d.roofCondition) score += condMap[d.roofCondition.toLowerCase()] ? 0.5 : 0;
+  score += ageAdj(d.roofAge, 25) * 0.4;
+
+  // HVAC condition + age (20yr useful life)
+  if (d.hvacCondition) score += condMap[d.hvacCondition.toLowerCase()] ? 0.5 : 0;
+  score += ageAdj(d.hvacAge, 20) * 0.4;
+
+  // Parking condition + age (25yr useful life)
+  if (d.parkingCondition) score += condMap[d.parkingCondition.toLowerCase()] ? 0.5 : 0;
+  score += ageAdj(d.parkingAge, 25) * 0.2;
+
   if (d.deferredMaint > 50000) score -= 1;
   if (d.envConcerns) score -= 1;
+
   return Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 }
 function calcCompsScore(d) {
@@ -1380,8 +1417,8 @@ function renderDealDetail(d) {
   h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
     <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Property Condition</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">`;
-  [["propertyCondition","Overall","select"],["roofCondition","Roof","select"],["parkingCondition","Parking","select"],
-   ["hvacNotes","HVAC Notes","text"],["deferredMaint","Deferred Maint ($)","number"],["envConcerns","Environmental Concerns","text"]
+  [["propertyCondition","Overall","select"],["roofCondition","Roof","select"],["parkingCondition","Parking","select"],["hvacCondition","HVAC","select"],
+   ["deferredMaint","Deferred Maint ($)","number"],["envConcerns","Environmental Concerns","text"]
   ].forEach(([field,label,type])=>{
     h+=`<div><div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">${label}</div>`;
     if(type==="select"){
@@ -1393,7 +1430,15 @@ function renderDealDetail(d) {
     }
     h+=`</div>`;
   });
-  h+=`</div>
+  // Age fields
+  h+=`</div><div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light)">
+    <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px">Age (Years)</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">`;
+  [["roofAge","Roof"],["hvacAge","HVAC"],["parkingAge","Parking"]].forEach(([field,label])=>{
+    h+=`<div><div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">${label}</div>
+    <input type="number" data-cond-field="${field}" value="${esc(String(d[field]||""))}" placeholder="e.g. 8" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif"></div>`;
+  });
+  h+=`</div></div>
     <button data-action="deal-save-condition" style="margin-top:14px;padding:7px 18px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif">Save Condition</button>
   </div>`;
 
@@ -1454,7 +1499,8 @@ function wireDealDetailEvents() {
   function snapshotCondition() {
     document.querySelectorAll("[data-cond-field]").forEach(el => {
       const field = el.dataset.condField;
-      d[field] = field === "deferredMaint" ? parseFloat(el.value) || 0 : el.value;
+      const numFields = ["deferredMaint","roofAge","hvacAge","parkingAge"];
+      d[field] = numFields.includes(field) ? parseFloat(el.value) || 0 : el.value;
     });
   }
 
@@ -1685,7 +1731,7 @@ async function saveDDToSheet() {
 }
 async function saveDealsToSheet() {
   if (!state.spreadsheetId) return;
-  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink","propertyCondition","roofCondition","parkingCondition","hvacNotes","deferredMaint","envConcerns"];
+  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink","propertyCondition","roofCondition","parkingCondition","hvacCondition","roofAge","hvacAge","parkingAge","deferredMaint","envConcerns","locationType","shadowAnchor","shadowAnchorName","coTenancy","marketRent","pop1mi","ahi1mi","pop5mi","ahi5mi","popGrowthRate","daytimePopulation"];
   const values = [headers, ...state.deals.map(d => headers.map(h => {
     const val = d[h]; if (val === undefined || val === null) return ""; if (typeof val === "object") return JSON.stringify(val); return String(val);
   }))];
