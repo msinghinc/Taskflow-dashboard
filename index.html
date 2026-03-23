@@ -2448,14 +2448,16 @@ function wireDealDetailEvents() {
         // Stop only on truly empty rows or summary rows, not on "Vacant" tenants
         if (!tenantName) break;
         if (tenantName === "Total" || tenantName === "Occupied") break;
-        const creditType = (row[0]||"").trim(); const suite = (row[2]||"").trim(); const gla = parseFloat(row[3])||0;
+        const suite = (row[2]||"").trim(); const gla = parseFloat(row[3])||0;
         const ls = (row[5]||"").toString().split("T")[0].split(" ")[0];
         const rawEnd = (row[6]||"").toString().trim(); const isMTM = rawEnd.toUpperCase() === "MTM";
         const le = isMTM ? mtmEnd() : rawEnd.split("T")[0].split(" ")[0];
-        const isVacant = creditType.toLowerCase() === "vacant" || tenantName.toLowerCase() === "vacant";
+        const isVacant = tenantName.toLowerCase() === "vacant";
+        const annualRecovery = strip$(row[10]);
         const tenantEvts = leaseEvents.filter(e => e.tenantName === tenantName && e.suite === suite);
         const lsType = tenantEvts.length && tenantEvts[tenantEvts.length-1].leaseType ? tenantEvts[tenantEvts.length-1].leaseType : "";
-        tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),annualRecovery:strip$(row[10]),recoveryPerSf:strip$(row[12]),totalRevenue:strip$(row[13]),isVacant,creditType,leaseSchedule:tenantEvts});
+        const detectedLeaseType = isVacant ? "vacant" : annualRecovery > 0 ? "nnn" : "gross";
+        tenants.push({name:tenantName,suite,sqft:gla,leaseType:lsType||detectedLeaseType,leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),annualRecovery,recoveryPerSf:strip$(row[12]),totalRevenue:strip$(row[13]),isVacant,creditType:"",leaseSchedule:tenantEvts});
       }
       state.dealDetailTenants = tenants;
       state.dealDetailSynced = true;
