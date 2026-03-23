@@ -2218,6 +2218,59 @@ function renderFinancialAnalysis(d) {
   </div>`;
 }
 
+// Update expense calculated cells in-place without re-render
+function updateExpenseCalcs() {
+  const d = state.deals.find(x => x.id === state.selectedDealDetail);
+  if (!d || !state.expenseRows) return;
+  const e = state.expenseRows;
+  const askingPrice = parseFloat(d.askingPrice) || 0;
+  const GENERAL_MULT = Math.pow(1.03, 4);
+  const INS_MULT = 1.15;
+  const TAX_RATE = 0.01025;
+  const pf = v => parseFloat(v) > 0 ? parseFloat(v) * GENERAL_MULT : 0;
+  const tilcModel = state.dealDetailSynced
+    ? buildTILCModel(state.dealDetailTenants, parseFloat(d.marketRent)||0,
+        state.dealDetailAcqDate||new Date(), state.dealDetailProFormaExpenses||0, parseFloat(d.sqft)||0)
+    : null;
+  const pfGross = tilcModel ? tilcModel.annual[3].grossIncome : 0;
+  const sacAreaKeywords = ["sacramento","citrus heights","elk grove","roseville","folsom",
+    "rancho cordova","natomas","fair oaks","orangevale","antelope","lincoln","rocklin","granite bay"];
+  const nearSac = sacAreaKeywords.some(k => (d.address||"").toLowerCase().includes(k));
+  const mgmtCurrent = parseFloat(e.mgmtFee) || (nearSac ? 6000 : pfGross * 0.05);
+  const pfMgmt = mgmtCurrent * GENERAL_MULT;
+  const pfTax = askingPrice > 0 ? askingPrice * TAX_RATE : pf(e.propertyTax);
+  const pfIns = (parseFloat(e.insurance)||0) * INS_MULT;
+
+  const fmt = v => v > 0 ? "$"+Math.round(v).toLocaleString() : "—";
+  const calcs = {
+    "exp-pf-serviceContracts": pf(e.serviceContracts),
+    "exp-pf-electricity": pf(e.electricity),
+    "exp-pf-landscape": pf(e.landscape),
+    "exp-pf-repairsMaint": pf(e.repairsMaint),
+    "exp-pf-janitor": pf(e.janitor),
+    "exp-pf-utilities": pf(e.utilities),
+    "exp-pf-nonReimbursable": pf(e.nonReimbursable),
+    "exp-pf-mgmtFee": pfMgmt,
+    "exp-pf-propertyTax": pfTax,
+    "exp-pf-insurance": pfIns,
+  };
+  Object.entries(calcs).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = fmt(val);
+  });
+  // Total
+  const totalCurrent = [e.serviceContracts,e.electricity,e.landscape,e.repairsMaint,
+    e.janitor,e.utilities,mgmtCurrent,e.nonReimbursable,e.propertyTax,e.insurance]
+    .reduce((s,v)=>s+(parseFloat(v)||0),0);
+  const totalPF = [pf(e.serviceContracts),pf(e.electricity),pf(e.landscape),pf(e.repairsMaint),
+    pf(e.janitor),pf(e.utilities),pfMgmt,pf(e.nonReimbursable),pfTax,pfIns]
+    .reduce((s,v)=>s+v,0);
+  const tc = document.getElementById("exp-total-current");
+  const tp = document.getElementById("exp-total-pf");
+  if (tc) tc.textContent = fmt(totalCurrent);
+  if (tp) tp.textContent = fmt(totalPF);
+}
+
 // ---- EXPENSES INPUT ----
 function renderExpensesInput(d) {
   const uwLink = d.uwLink || "";
@@ -2272,11 +2325,11 @@ function renderExpensesInput(d) {
   function inp(field, val, placeholder="0") {
     return `<input type="number" value="${val||""}" placeholder="${placeholder}"
       style="${inStyle}"
-      oninput="state.expenseRows['${field}']=this.value;document.getElementById('exp-input-wrap').outerHTML=renderExpensesInput(state.deals.find(x=>x.id===state.selectedDealDetail))">`;
+      oninput="state.expenseRows['${field}']=this.value;updateExpenseCalcs()">`;
   }
 
-  function pfCell(val) {
-    return `<div style="${calcStyle}">${val > 0 ? "$"+Math.round(val).toLocaleString() : "—"}</div>`;
+  function pfCell(val, id) {
+    return `<div id="${id}" style="${calcStyle}">${val > 0 ? "$"+Math.round(val).toLocaleString() : "—"}</div>`;
   }
 
   const thS = `padding:8px 10px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid var(--border);text-align:left`;
@@ -2313,7 +2366,7 @@ function renderExpensesInput(d) {
     h += `<tr>
       <td style="${labelS}">${label}</td>
       <td style="${tdS}">${inp(field, cur)}</td>
-      <td style="${tdS}">${pfCell(pfVal)}</td>
+      <td style="${tdS}">${pfCell(pfVal, "exp-pf-"+field)}</td>
       <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">${cell}</td>
     </tr>`;
   });
@@ -2326,7 +2379,7 @@ function renderExpensesInput(d) {
       <div style="font-size:10px;color:${nearSac?'#34C759':'#0071E3'};margin-top:2px">💡 ${mgmtSuggestion.label}</div>
     </td>
     <td style="${tdS}">${inp("mgmtFee", mgmtVal, mgmtSuggestion.value||"0")}</td>
-    <td style="${tdS}">${pfCell(pfMgmt)}</td>
+    <td style="${tdS}">${pfCell(pfMgmt, "exp-pf-mgmtFee")}</td>
     <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">C24</td>
   </tr>`;
 
@@ -2338,7 +2391,7 @@ function renderExpensesInput(d) {
       <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Pro forma: ${taxNote}</div>
     </td>
     <td style="${tdS}">${inp("propertyTax", e.propertyTax)}</td>
-    <td style="${tdS}">${pfCell(pfTax)}</td>
+    <td style="${tdS}">${pfCell(pfTax, "exp-pf-propertyTax")}</td>
     <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">B26/E26</td>
   </tr>`;
 
@@ -2349,15 +2402,15 @@ function renderExpensesInput(d) {
       <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Pro forma: current × 1.15</div>
     </td>
     <td style="${tdS}">${inp("insurance", e.insurance)}</td>
-    <td style="${tdS}">${pfCell(pfIns)}</td>
+    <td style="${tdS}">${pfCell(pfIns, "exp-pf-insurance")}</td>
     <td style="${tdS};text-align:right;font-size:10px;color:var(--text-muted);font-family:monospace">B27/E27</td>
   </tr>`;
 
   // Totals
   h += `<tr style="background:rgba(0,0,0,0.02);border-top:2px solid var(--border)">
     <td style="padding:8px 10px;font-weight:600;color:var(--text)">Total Expenses</td>
-    <td style="padding:8px 6px"><div style="${calcStyle};font-weight:600;color:var(--text)">${totalCurrent>0?"$"+Math.round(totalCurrent).toLocaleString():"—"}</div></td>
-    <td style="padding:8px 6px"><div style="${calcStyle};font-weight:600;color:var(--text)">${totalPF>0?"$"+Math.round(totalPF).toLocaleString():"—"}</div></td>
+    <td style="padding:8px 6px"><div id="exp-total-current" style="${calcStyle};font-weight:600;color:var(--text)">${totalCurrent>0?"$"+Math.round(totalCurrent).toLocaleString():"—"}</div></td>
+    <td style="padding:8px 6px"><div id="exp-total-pf" style="${calcStyle};font-weight:600;color:var(--text)">${totalPF>0?"$"+Math.round(totalPF).toLocaleString():"—"}</div></td>
     <td style="padding:8px 10px;font-size:10px;color:var(--text-muted);font-family:monospace;text-align:right">B28/E28</td>
   </tr>`;
 
