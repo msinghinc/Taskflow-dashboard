@@ -501,6 +501,10 @@ let state = {
   dealDetailSynced: false,
   dealDetailProFormaNoi: 0,
   dealDetailLoanData: { rate: 0, amortYears: 0, downPct: 0, exitCap: 0 },
+  dealDetailIRRCashflows: [],
+  dealDetailEquityIn: 0,
+  dealDetailAcqDate: null,
+  dealDetailFinTab: "overview",
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -1603,134 +1607,453 @@ function renderDealSummary(d, tenants) {
   return h;
 }
 
-// ---- HOW TO COUNTER ----
-function renderHowToCounter(d) {
-  if (!state.dealDetailSynced) return "";
-  const noi = state.dealDetailProFormaNoi;
-  const { rate, amortYears, downPct, exitCap } = state.dealDetailLoanData;
-  const sqft = parseFloat(d.sqft) || 0;
-  const askingPrice = parseFloat(d.askingPrice) || 0;
-  const HOLD_YEARS = 4;
+// ---- FINANCIAL ANALYSIS ENGINE ----
 
-  if (!noi || !rate || !amortYears || !downPct || !exitCap) {
-    const missing = [];
-    if (!noi) missing.push("Pro Forma NOI");
-    if (!rate) missing.push("Interest Rate");
-    if (!amortYears) missing.push("Amortization");
-    if (!downPct) missing.push("Down Payment %");
-    if (!exitCap) missing.push("Exit Cap Rate");
-    return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;box-shadow:var(--shadow-sm)">
-      <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:6px;letter-spacing:-0.3px">How to Counter</div>
-      <div style="font-size:13px;color:var(--text-muted)">Missing: ${missing.join(", ")}. Sync UW to calculate.</div>
-    </div>`;
+// IRR solver (Newton-Raphson)
+function calcIRR(cashflows) {
+  if (!cashflows || cashflows.length < 2) return null;
+  let rate = 0.1;
+  for (let i = 0; i < 100; i++) {
+    let npv = 0, dnpv = 0;
+    cashflows.forEach((cf, t) => {
+      const d = Math.pow(1 + rate, t);
+      npv += cf / d;
+      dnpv -= t * cf / (d * (1 + rate));
+    });
+    if (Math.abs(npv) < 0.01) break;
+    if (dnpv === 0) break;
+    rate -= npv / dnpv;
+    if (rate < -0.99) rate = -0.99;
+  }
+  return isFinite(rate) ? rate * 100 : null;
+}
+
+// Remaining loan balance after N months
+function loanBalance(principal, annualRate, totalYears, monthsPaid) {
+  const r = annualRate / 100 / 12;
+  const n = totalYears * 12;
+  if (r === 0) return principal * (1 - monthsPaid / n);
+  return principal * (Math.pow(1+r, n) - Math.pow(1+r, monthsPaid)) / (Math.pow(1+r, n) - 1);
+}
+
+// Monthly mortgage payment
+function monthlyPmt(principal, annualRate, years) {
+  const r = annualRate / 100 / 12;
+  const n = years * 12;
+  if (r === 0) return principal / n;
+  return principal * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
+}
+
+// Adjusted market rent by suite size
+function adjMarketRent(marketRent, sqft) {
+  if (!marketRent) return 0;
+  if (sqft < 1500) return marketRent * 0.8;
+  if (sqft < 5000) return marketRent * 0.7;
+  if (sqft < 10000) return marketRent * 0.6;
+  return marketRent * 0.5;
+}
+
+// Vacancy months by suite size
+function vacancyMonths(sqft) {
+  if (sqft < 1500) return 6;
+  if (sqft < 5000) return 9;
+  if (sqft < 10000) return 12;
+  return 18;
+}
+
+// Build month-level TILC cashflow model
+// Returns array of 48 monthly net cashflows (operating only, no debt service, no acquisition)
+function buildTILCModel(tenants, marketRent, acqDate) {
+  const MONTHS = 48;
+  const monthlyCF = new Array(MONTHS).fill(0); // net operating CF per month
+  const tilcEvents = []; // for display
+
+  if (!acqDate) acqDate = new Date();
+
+  tenants.forEach(t => {
+    if (!t.sqft) return;
+    const adjMR = adjMarketRent(marketRent, t.sqft);
+    const monthlyBaseRent = (t.annualRent || 0) / 12;
+    const monthlyRecovery = (t.annualRecovery || 0) / 12;
+    const rentPerSf = t.rentPerSf || 0;
+
+    // Add base income for occupied tenants for their current lease term
+    if (!t.isVacant) {
+      // Determine lease end month relative to acqDate
+      let leaseEndMonth = MONTHS; // default: lasts full hold
+      if (t.leaseEnd && !t.isMTM) {
+        const leEnd = new Date(t.leaseEnd + "T00:00:00");
+        const mDiff = (leEnd.getFullYear() - acqDate.getFullYear()) * 12 + (leEnd.getMonth() - acqDate.getMonth());
+        leaseEndMonth = Math.max(0, Math.min(MONTHS, mDiff));
+      } else if (t.isMTM) {
+        // MTM — check if below 50% of market
+        const pctOfMarket = adjMR > 0 ? rentPerSf / adjMR : 1;
+        leaseEndMonth = pctOfMarket < 0.5 ? 0 : MONTHS; // below 50% market → treat as expired now
+      }
+
+      // Add income for lease term
+      for (let m = 0; m < leaseEndMonth && m < MONTHS; m++) {
+        monthlyCF[m] += monthlyBaseRent + monthlyRecovery;
+      }
+
+      // Handle lease event at expiry
+      if (leaseEndMonth < MONTHS) {
+        const isRenewal = Math.random() < 0.75; // weighted 75/25
+        const newRent = adjMR * t.sqft / 12;
+        const newRecovery = monthlyRecovery; // assume same recoveries
+
+        if (isRenewal) {
+          // 3 months free rent (recoveries only), then full rent
+          const freeEnd = Math.min(leaseEndMonth + 3, MONTHS);
+          for (let m = leaseEndMonth; m < freeEnd; m++) monthlyCF[m] += monthlyRecovery;
+          const tiCost = 10 * t.sqft;
+          const lcCost = 0.04 * (adjMR * t.sqft * 5);
+          if (leaseEndMonth < MONTHS) { monthlyCF[leaseEndMonth] -= (tiCost + lcCost); }
+          for (let m = freeEnd; m < MONTHS; m++) monthlyCF[m] += newRent + newRecovery;
+          tilcEvents.push({ month: leaseEndMonth, tenant: t.name, suite: t.suite, sqft: t.sqft, type: "Renewal", ti: tiCost, lc: lcCost, freeRent: 3, newRentPsf: adjMR });
+        } else {
+          // Vacancy period
+          const vacMo = vacancyMonths(t.sqft);
+          const newLeaseStart = Math.min(leaseEndMonth + vacMo, MONTHS);
+          const tiCost = 25 * t.sqft;
+          const lcCost = 0.06 * (adjMR * t.sqft * 5);
+          if (newLeaseStart < MONTHS) { monthlyCF[newLeaseStart] -= (tiCost + lcCost); }
+          for (let m = newLeaseStart; m < MONTHS; m++) monthlyCF[m] += newRent + newRecovery;
+          tilcEvents.push({ month: leaseEndMonth, tenant: t.name, suite: t.suite, sqft: t.sqft, type: "New Tenant", ti: tiCost, lc: lcCost, vacancy: vacMo, newRentPsf: adjMR });
+        }
+      }
+    } else {
+      // Currently vacant — new tenant scenario
+      const vacMo = vacancyMonths(t.sqft);
+      const newRent = adjMR * t.sqft / 12;
+      const tiCost = 25 * t.sqft;
+      const lcCost = 0.06 * (adjMR * t.sqft * 5);
+      if (vacMo < MONTHS) { monthlyCF[vacMo] -= (tiCost + lcCost); }
+      for (let m = vacMo; m < MONTHS; m++) monthlyCF[m] += newRent + monthlyRecovery;
+      tilcEvents.push({ month: 0, tenant: t.name + " (Vacant)", suite: t.suite, sqft: t.sqft, type: "Vacant→New", ti: tiCost, lc: lcCost, vacancy: vacMo, newRentPsf: adjMR });
+    }
+  });
+
+  // Roll up to annual
+  const annualCF = [0, 0, 0, 0];
+  for (let m = 0; m < MONTHS; m++) {
+    annualCF[Math.floor(m / 12)] += monthlyCF[m];
   }
 
-  // Monthly mortgage payment
-  function monthlyPayment(loanAmt, annualRate, years) {
-    const r = annualRate / 100 / 12;
-    const n = years * 12;
-    if (r === 0) return loanAmt / n;
-    return loanAmt * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
-  }
+  return { monthlyCF, annualCF, tilcEvents };
+}
 
-  // Remaining loan balance after N years
-  function remainingBalance(loanAmt, annualRate, totalYears, yearsPaid) {
-    const r = annualRate / 100 / 12;
-    const n = totalYears * 12;
-    const p = yearsPaid * 12;
-    if (r === 0) return loanAmt * (1 - p/n);
-    return loanAmt * (Math.pow(1+r, n) - Math.pow(1+r, p)) / (Math.pow(1+r, n) - 1);
-  }
-
-  // Calculate ROI for a given purchase price
-  function calcROI(price) {
+// Solve target price for 100% ROI
+function solveTargetPrice100(noi, exitCap, rate, amortYears, downPct, tilcModel) {
+  function calcROIAtPrice(price) {
     const down = price * downPct / 100;
     const loan = price - down;
-    const monthlyPmt = monthlyPayment(loan, rate, amortYears);
-    const annualDS = monthlyPmt * 12;
-    const annualCF = noi - annualDS;
-    const totalCF = annualCF * HOLD_YEARS;
+    const closingCosts = (loan * 0.01) + 25000;
+    const totalEquity = down + closingCosts;
+    const pmt = monthlyPmt(loan, rate, amortYears);
+    const annualDS = pmt * 12;
     const exitValue = noi / (exitCap / 100);
-    const loanPayoff = remainingBalance(loan, rate, amortYears, HOLD_YEARS);
-    const netExitProceeds = exitValue - loanPayoff;
-    const totalReturn = totalCF + netExitProceeds - down;
-    const roi = down > 0 ? (totalReturn / down) * 100 : 0;
-    return { down, loan, annualCF, totalCF, exitValue, loanPayoff, netExitProceeds, totalReturn, roi, annualDS };
+    const loanPayoff = loanBalance(loan, rate, amortYears, 48);
+    // 4-year cashflows: Year 1 includes acquisition outlay
+    const cfs = tilcModel.annualCF.map((cf, i) => cf - annualDS);
+    const totalOperatingCF = cfs.reduce((a, b) => a + b, 0);
+    const netExit = exitValue - loanPayoff;
+    const profit = totalOperatingCF + netExit - totalEquity;
+    return { roi: totalEquity > 0 ? (profit / totalEquity) * 100 : 0, profit, totalEquity, netExit, totalOperatingCF, exitValue, down, closingCosts, annualDS, loanPayoff };
+  }
+  let lo = 1000, hi = noi * 150;
+  for (let i = 0; i < 150; i++) {
+    const mid = (lo + hi) / 2;
+    const { roi } = calcROIAtPrice(mid);
+    if (Math.abs(roi - 100) < 0.01) return { price: mid, ...calcROIAtPrice(mid) };
+    if (roi < 100) hi = mid; else lo = mid;
+  }
+  return { price: (lo + hi) / 2, ...calcROIAtPrice((lo + hi) / 2) };
+}
+
+function renderFinancialAnalysis(d) {
+  if (!state.dealDetailSynced) return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;box-shadow:var(--shadow-sm)">
+    <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:6px;letter-spacing:-0.3px">Financial Analysis</div>
+    <div style="font-size:13px;color:var(--text-muted)">Sync UW to run financial analysis.</div>
+  </div>`;
+
+  const noi = state.dealDetailProFormaNoi;
+  const { rate, amortYears, downPct, exitCap } = state.dealDetailLoanData;
+  const tenants = state.dealDetailTenants;
+  const marketRent = parseFloat(d.marketRent) || 0;
+  const askingPrice = parseFloat(d.askingPrice) || 0;
+  const sqft = parseFloat(d.sqft) || 0;
+  const acqDate = state.dealDetailAcqDate || new Date();
+  const equityIn = state.dealDetailEquityIn;
+  const irrCFs = state.dealDetailIRRCashflows;
+  const activeTab = state.dealDetailFinTab || "overview";
+
+  // Use UW IRR cashflows if available, otherwise build from model
+  const tilcModel = buildTILCModel(tenants, marketRent, acqDate);
+
+  // Financial metrics
+  const exitValue = noi && exitCap ? noi / (exitCap / 100) : 0;
+  const profit = irrCFs.length ? irrCFs.reduce((a,b) => a+b, 0) : 0;
+  const roi = equityIn > 0 ? (profit / equityIn * 100) : 0;
+  const irr = irrCFs.length >= 2 ? calcIRR(irrCFs) : null;
+
+  // Target price solve
+  const missing = !noi || !rate || !amortYears || !downPct || !exitCap;
+  let targetData = null;
+  if (!missing) targetData = solveTargetPrice100(noi, exitCap, rate, amortYears, downPct, tilcModel);
+
+  // Asking price metrics
+  let askingMetrics = null;
+  if (!missing && askingPrice) {
+    const down = askingPrice * downPct / 100;
+    const loan = askingPrice - down;
+    const closingCosts = (loan * 0.01) + 25000;
+    const totalEquity = down + closingCosts;
+    const pmt = monthlyPmt(loan, rate, amortYears);
+    const annualDS = pmt * 12;
+    const loanPayoff = loanBalance(loan, rate, amortYears, 48);
+    const netExit = exitValue - loanPayoff;
+    const totalOperatingCF = tilcModel.annualCF.reduce((a,b) => a+b, 0) - annualDS * 4;
+    const askProfit = totalOperatingCF + netExit - totalEquity;
+    askingMetrics = { roi: totalEquity > 0 ? askProfit/totalEquity*100 : 0, profit: askProfit, totalEquity, netExit, down, closingCosts, annualDS, loanPayoff, annualCF: tilcModel.annualCF.map(cf => cf - annualDS) };
   }
 
-  // Binary search for price at 100% ROI
-  function solveTargetPrice() {
-    let lo = 1000, hi = noi * 100, price = 0;
-    for (let i = 0; i < 150; i++) {
-      price = (lo + hi) / 2;
-      const { roi } = calcROI(price);
-      if (Math.abs(roi - 100) < 0.01) break;
-      if (roi < 100) hi = price;
-      else lo = price;
+  const roiColor = roi >= 100 ? "#34C759" : roi >= 50 ? "#FF9F0A" : "#FF3B30";
+  const askRoiColor = askingMetrics ? (askingMetrics.roi >= 100 ? "#34C759" : askingMetrics.roi >= 50 ? "#FF9F0A" : "#FF3B30") : "#AEAEB2";
+
+  // Tab content
+  function tabBtn(id, label) {
+    const active = activeTab === id;
+    return `<button onclick="state.dealDetailFinTab='${id}';document.getElementById('deal-how-to-counter').innerHTML=renderFinancialAnalysis(state.deals.find(x=>x.id===state.selectedDealDetail))" style="padding:6px 16px;border-radius:20px;font-size:12px;cursor:pointer;border:none;background:${active?'var(--bg-dark)':'transparent'};color:${active?'#fff':'var(--text-secondary)'};font-weight:${active?'600':'400'};font-family:'Inter',sans-serif;transition:all 0.15s">${label}</button>`;
+  }
+
+  let content = "";
+
+  if (activeTab === "overview") {
+    // Key metrics row
+    const metrics = [
+      { label: "ROI (UW)", val: roi.toFixed(1)+"%", color: roiColor, sub: equityIn > 0 ? `on ${fmt$(equityIn)} equity` : "" },
+      { label: "IRR", val: irr !== null ? irr.toFixed(1)+"%" : "—", color: irr >= 20 ? "#34C759" : irr >= 12 ? "#FF9F0A" : "#FF3B30", sub: "4yr hold" },
+      { label: "Profit", val: fmt$(profit), color: profit > 0 ? "#34C759" : "#FF3B30", sub: "total return" },
+      { label: "Exit Value", val: fmt$(exitValue), color: "var(--text)", sub: `@ ${exitCap}% cap` },
+    ];
+    content += `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">`;
+    metrics.forEach(m => {
+      content += `<div style="background:var(--bg);border-radius:var(--radius);padding:14px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">${m.label}</div>
+        <div style="font-size:22px;font-weight:700;color:${m.color};letter-spacing:-1px;line-height:1">${m.val}</div>
+        ${m.sub ? `<div style="font-size:10px;color:var(--text-muted);margin-top:4px">${m.sub}</div>` : ""}
+      </div>`;
+    });
+    content += `</div>`;
+
+    // Counter price
+    if (targetData) {
+      const gap = askingPrice - targetData.price;
+      const gapPct = askingPrice > 0 ? gap / askingPrice * 100 : 0;
+      content += `<div style="background:var(--bg);border-radius:var(--radius);padding:16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:12px">Counter Offer Analysis</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Target Price (100% ROI)</div>
+            <div style="font-size:18px;font-weight:700;color:#34C759;letter-spacing:-0.5px">${fmt$(targetData.price)}</div>
+            ${sqft ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">$${Math.round(targetData.price/sqft)}/SF</div>` : ""}
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">ROI @ Asking</div>
+            <div style="font-size:18px;font-weight:700;color:${askRoiColor};letter-spacing:-0.5px">${askingMetrics ? askingMetrics.roi.toFixed(1)+"%" : "—"}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Gap to Target</div>
+            <div style="font-size:18px;font-weight:700;color:${gap>0?"#FF3B30":"#34C759"};letter-spacing:-0.5px">${gap>0?"-":"+"}${fmt$(Math.abs(gap))}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${Math.abs(gapPct).toFixed(1)}% ${gap>0?"above":"below"} target</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light);font-size:11px;color:var(--text-muted)">
+          ${rate}% rate · ${amortYears}yr amort · ${downPct}% down · ${exitCap}% exit cap · 4yr hold · Closing costs: 1% of loan + $25K
+        </div>
+      </div>`;
     }
-    return price;
+
+    // Return breakdown
+    if (askingMetrics) {
+      content += `<div style="background:var(--bg);border-radius:var(--radius);padding:16px">
+        <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px">Return Breakdown @ Asking</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+          <span style="color:var(--text-muted)">Down Payment</span><span style="font-weight:500;text-align:right">${fmt$(askingMetrics.down)}</span>
+          <span style="color:var(--text-muted)">Closing Costs</span><span style="font-weight:500;text-align:right">${fmt$(askingMetrics.closingCosts)}</span>
+          <span style="color:var(--text-muted)">Total Equity In</span><span style="font-weight:600;text-align:right">${fmt$(askingMetrics.totalEquity)}</span>
+          <span style="color:var(--text-muted);padding-top:8px;border-top:1px solid var(--border-light)">4yr Operating CF</span><span style="font-weight:500;text-align:right;padding-top:8px;border-top:1px solid var(--border-light)">${fmt$(askingMetrics.annualCF.reduce((a,b)=>a+b,0))}</span>
+          <span style="color:var(--text-muted)">Net Exit Proceeds</span><span style="font-weight:500;text-align:right">${fmt$(askingMetrics.netExit)}</span>
+          <span style="color:var(--text-muted)">Loan Payoff</span><span style="font-weight:500;text-align:right;color:#FF3B30">-${fmt$(askingMetrics.loanPayoff)}</span>
+          <span style="color:var(--text);font-weight:600;padding-top:8px;border-top:1px solid var(--border-light)">Total Profit</span><span style="font-weight:700;text-align:right;color:${askingMetrics.profit>0?"#34C759":"#FF3B30"};padding-top:8px;border-top:1px solid var(--border-light)">${fmt$(askingMetrics.profit)}</span>
+        </div>
+      </div>`;
+    }
   }
 
-  const target100 = solveTargetPrice();
-  const targetPsf = sqft > 0 ? target100 / sqft : 0;
-  const askingMetrics = calcROI(askingPrice);
-  const targetMetrics = calcROI(target100);
-  const gap = askingPrice - target100;
-  const gapPct = askingPrice > 0 ? (gap / askingPrice * 100) : 0;
-  const roiColor = askingMetrics.roi >= 100 ? "#34C759" : askingMetrics.roi >= 50 ? "#FF9F0A" : "#FF3B30";
+  else if (activeTab === "cashflow") {
+    const years = acqDate ? [acqDate.getFullYear(), acqDate.getFullYear()+1, acqDate.getFullYear()+2, acqDate.getFullYear()+3] : [1,2,3,4];
+    const annualDS = askingMetrics ? askingMetrics.annualDS : 0;
+    const annualTILC = [0,0,0,0];
+    tilcModel.tilcEvents.forEach(ev => {
+      const yr = Math.floor(ev.month / 12);
+      if (yr < 4) annualTILC[yr] += (ev.ti || 0) + (ev.lc || 0);
+    });
 
-  // Exit value is same regardless of price (NOI / exitCap)
-  const exitValue = noi / (exitCap / 100);
+    content += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Line Item</th>
+        ${years.map(y=>`<th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:600;color:var(--text)">${y}</th>`).join("")}
+      </tr></thead>
+      <tbody>`;
+
+    // NOI row
+    content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Gross Operating Income</td>${tilcModel.annualCF.map((cf,i)=>{
+      const tilc = annualTILC[i];
+      const grossIncome = cf + tilc; // add back TILC to get gross
+      return `<td style="text-align:right;padding:8px 12px;font-weight:500">${fmt$(grossIncome)}</td>`;
+    }).join("")}</tr>`;
+
+    // TILC
+    content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">TILC Costs</td>${annualTILC.map(t=>`<td style="text-align:right;padding:8px 12px;color:#FF3B30;font-weight:500">${t > 0 ? "-"+fmt$(t) : "—"}</td>`).join("")}</tr>`;
+
+    // Net operating CF
+    content += `<tr style="border-bottom:1px solid var(--border-light);background:rgba(0,0,0,0.02)"><td style="padding:8px 12px;font-weight:600;color:var(--text)">Net Operating CF</td>${tilcModel.annualCF.map(cf=>`<td style="text-align:right;padding:8px 12px;font-weight:600;color:${cf>=0?"var(--text)":"#FF3B30"}">${fmt$(cf)}</td>`).join("")}</tr>`;
+
+    // Debt service
+    content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Debt Service</td>${[0,0,0,0].map(()=>`<td style="text-align:right;padding:8px 12px;color:#FF3B30;font-weight:500">${annualDS > 0 ? "-"+fmt$(annualDS) : "—"}</td>`).join("")}</tr>`;
+
+    // Cash flow after DS
+    if (askingMetrics) {
+      content += `<tr style="border-bottom:2px solid var(--border);background:rgba(0,0,0,0.02)"><td style="padding:8px 12px;font-weight:600;color:var(--text)">Cash Flow After DS</td>${askingMetrics.annualCF.map(cf=>`<td style="text-align:right;padding:8px 12px;font-weight:700;color:${cf>=0?"#34C759":"#FF3B30"}">${fmt$(cf)}</td>`).join("")}</tr>`;
+    }
+
+    // Exit row (Year 4 only)
+    if (exitValue && askingMetrics) {
+      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Exit Value</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="text-align:right;padding:8px 12px;font-weight:500">${fmt$(exitValue)}</td></tr>`;
+      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Loan Payoff</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="text-align:right;padding:8px 12px;color:#FF3B30;font-weight:500">-${fmt$(askingMetrics.loanPayoff)}</td></tr>`;
+    }
+
+    content += `</tbody></table></div>`;
+  }
+
+  else if (activeTab === "rentroll") {
+    const totalGLA = tenants.reduce((s,t) => s+(t.sqft||0), 0);
+    const totalRent = tenants.filter(t=>!t.isVacant).reduce((s,t) => s+(t.annualRent||0), 0);
+    content += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Tenant</th>
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Suite</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">SF</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">% GLA</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Contract $/SF</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Market $/SF</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Variance</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Lease End</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">% Revenue</th>
+      </tr></thead><tbody>`;
+
+    tenants.forEach(t => {
+      const adjMR = adjMarketRent(marketRent, t.sqft);
+      const variance = adjMR > 0 && t.rentPerSf ? t.rentPerSf - adjMR : null;
+      const varPct = adjMR > 0 && t.rentPerSf ? (t.rentPerSf - adjMR) / adjMR * 100 : null;
+      const revPct = totalRent > 0 && t.annualRent ? t.annualRent / totalRent * 100 : 0;
+      const glaPct = totalGLA > 0 ? (t.sqft||0) / totalGLA * 100 : 0;
+      const isVacant = t.isVacant;
+      content += `<tr style="border-bottom:1px solid var(--border-light)">
+        <td style="padding:8px 12px;font-weight:${isVacant?'400':'500'};color:${isVacant?'var(--text-muted)':'var(--text)'}">${esc(t.name)}${isVacant?' <span style="font-size:9px;background:#FFF3CD;color:#856404;padding:1px 5px;border-radius:3px;margin-left:4px">VACANT</span>':''}</td>
+        <td style="padding:8px 12px;color:var(--text-muted)">${esc(t.suite||"—")}</td>
+        <td style="text-align:right;padding:8px 12px">${fmtNum(t.sqft)}</td>
+        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${glaPct.toFixed(1)}%</td>
+        <td style="text-align:right;padding:8px 12px">${t.rentPerSf ? "$"+t.rentPerSf.toFixed(2) : "—"}</td>
+        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${adjMR ? "$"+adjMR.toFixed(2) : "—"}</td>
+        <td style="text-align:right;padding:8px 12px;font-weight:500;color:${variance===null?'var(--text-muted)':variance>=0?'#34C759':'#FF3B30'}">${variance!==null?(variance>=0?"+":"")+variance.toFixed(2)+" ("+varPct.toFixed(0)+"%)":"—"}</td>
+        <td style="text-align:right;padding:8px 12px;color:${t.isMTM?'#FF9F0A':'var(--text-secondary)'}">${t.isMTM?"MTM":(t.leaseEnd||"—")}</td>
+        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${revPct > 0 ? revPct.toFixed(1)+"%" : "—"}</td>
+      </tr>`;
+    });
+    content += `</tbody></table></div>`;
+  }
+
+  else if (activeTab === "expirations") {
+    // Group expirations by year
+    const expByYear = {};
+    tenants.forEach(t => {
+      if (!t.leaseEnd || t.isVacant) return;
+      const yr = t.isMTM ? "MTM" : t.leaseEnd.substring(0,4);
+      if (!expByYear[yr]) expByYear[yr] = [];
+      expByYear[yr].push(t);
+    });
+    const totalGLA = tenants.reduce((s,t) => s+(t.sqft||0), 0);
+
+    // Bar chart
+    const years = Object.keys(expByYear).sort();
+    const maxSF = Math.max(...years.map(y => expByYear[y].reduce((s,t) => s+(t.sqft||0), 0)));
+    content += `<div style="display:flex;align-items:flex-end;gap:8px;height:160px;margin-bottom:20px;padding:0 4px">`;
+    years.forEach(yr => {
+      const sf = expByYear[yr].reduce((s,t) => s+(t.sqft||0), 0);
+      const pct = totalGLA > 0 ? (sf/totalGLA*100).toFixed(1) : 0;
+      const h = maxSF > 0 ? Math.max(8, Math.round(sf/maxSF*120)) : 8;
+      const color = yr === "MTM" ? "#FF9F0A" : parseFloat(pct) > 30 ? "#FF3B30" : parseFloat(pct) > 15 ? "#FF9F0A" : "#0071E3";
+      content += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+        <div style="font-size:10px;font-weight:700;color:${color}">${pct}%</div>
+        <div style="width:100%;height:${h}px;background:${color};border-radius:4px 4px 0 0;opacity:0.85"></div>
+        <div style="font-size:10px;color:var(--text-secondary);font-weight:500">${yr}</div>
+        <div style="font-size:9px;color:var(--text-muted)">${fmtNum(sf)} SF</div>
+      </div>`;
+    });
+    content += `</div>`;
+
+    // Expiration table
+    content += `<table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Expiration</th>
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Tenant</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">SF</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">% Bldg</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Contract $/SF</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Market $/SF</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Variance</th>
+      </tr></thead><tbody>`;
+    years.forEach(yr => {
+      const yrTenants = expByYear[yr];
+      const yrSF = yrTenants.reduce((s,t) => s+(t.sqft||0), 0);
+      yrTenants.forEach(t => {
+        const adjMR = adjMarketRent(marketRent, t.sqft);
+        const variance = adjMR > 0 && t.rentPerSf ? t.rentPerSf - adjMR : null;
+        const glaPct = totalGLA > 0 ? (t.sqft||0)/totalGLA*100 : 0;
+        content += `<tr style="border-bottom:1px solid var(--border-light)">
+          <td style="padding:8px 12px;color:${t.isMTM?'#FF9F0A':'var(--text-secondary)'}">${t.isMTM?"MTM":t.leaseEnd}</td>
+          <td style="padding:8px 12px;font-weight:500;color:var(--text)">${esc(t.name)}</td>
+          <td style="text-align:right;padding:8px 12px">${fmtNum(t.sqft)}</td>
+          <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${glaPct.toFixed(1)}%</td>
+          <td style="text-align:right;padding:8px 12px">${t.rentPerSf?"$"+t.rentPerSf.toFixed(2):"—"}</td>
+          <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${adjMR?"$"+adjMR.toFixed(2):"—"}</td>
+          <td style="text-align:right;padding:8px 12px;font-weight:500;color:${variance===null?'var(--text-muted)':variance>=0?'#34C759':'#FF3B30'}">${variance!==null?(variance>=0?"+":"")+variance.toFixed(2):"—"}</td>
+        </tr>`;
+      });
+      content += `<tr style="border-bottom:1px solid var(--border);background:rgba(0,0,0,0.02)">
+        <td colspan="2" style="padding:6px 12px;font-weight:600;color:var(--text);font-size:11px">${yr} Total</td>
+        <td style="text-align:right;padding:6px 12px;font-weight:600">${fmtNum(yrSF)}</td>
+        <td style="text-align:right;padding:6px 12px;font-weight:600;color:var(--text-muted)">${totalGLA>0?(yrSF/totalGLA*100).toFixed(1):0}%</td>
+        <td colspan="3"></td>
+      </tr>`;
+    });
+    content += `</tbody></table>`;
+  }
 
   return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;box-shadow:var(--shadow-sm)">
-    <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:4px;letter-spacing:-0.3px">How to Counter</div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px">${rate}% rate · ${amortYears}yr amort · ${downPct}% down · ${exitCap}% exit cap · ${HOLD_YEARS}yr hold · Pro Forma NOI ${fmt$(noi)} · Exit Value ${fmt$(exitValue)}</div>
-
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:20px">
-      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
-        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Target Price (100% ROI)</div>
-        <div style="font-size:20px;font-weight:700;color:#34C759;letter-spacing:-0.8px">${fmt$(target100)}</div>
-        ${targetPsf ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">$${Math.round(targetPsf)}/SF</div>` : ""}
-      </div>
-      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
-        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">ROI @ Asking</div>
-        <div style="font-size:20px;font-weight:700;color:${roiColor};letter-spacing:-0.8px">${askingMetrics.roi.toFixed(1)}%</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${HOLD_YEARS}yr hold</div>
-      </div>
-      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
-        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Exit Value</div>
-        <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.8px">${fmt$(exitValue)}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">@ ${exitCap}% cap</div>
-      </div>
-      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
-        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Annual Cash Flow</div>
-        <div style="font-size:20px;font-weight:700;color:${askingMetrics.annualCF>=0?'var(--text)':'#FF3B30'};letter-spacing:-0.8px">${fmt$(askingMetrics.annualCF)}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">after debt service</div>
-      </div>
-      ${askingPrice > 0 ? `<div style="background:var(--bg);border-radius:var(--radius);padding:14px">
-        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Gap to Target</div>
-        <div style="font-size:20px;font-weight:700;color:${gap>0?'#FF3B30':'#34C759'};letter-spacing:-0.8px">${gap>0?"-":"+"}${fmt$(Math.abs(gap))}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${Math.abs(gapPct).toFixed(1)}% ${gap>0?"above":"below"} target</div>
-      </div>` : ""}
-    </div>
-
-    <div style="background:var(--bg);border-radius:var(--radius);padding:14px;font-size:12px;color:var(--text-secondary);line-height:1.7">
-      <div style="font-weight:600;color:var(--text);margin-bottom:6px">Return Breakdown @ Asking Price</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-        <span style="color:var(--text-muted)">Down Payment</span><span style="font-weight:500">${fmt$(askingMetrics.down)}</span>
-        <span style="color:var(--text-muted)">Total Cash Flow (${HOLD_YEARS}yr)</span><span style="font-weight:500">${fmt$(askingMetrics.totalCF)}</span>
-        <span style="color:var(--text-muted)">Net Exit Proceeds</span><span style="font-weight:500">${fmt$(askingMetrics.netExitProceeds)}</span>
-        <span style="color:var(--text-muted)">Total Return</span><span style="font-weight:600;color:${askingMetrics.totalReturn>=0?'#34C759':'#FF3B30'}">${fmt$(askingMetrics.totalReturn)}</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:17px;font-weight:600;color:var(--text);letter-spacing:-0.3px">Financial Analysis</div>
+      <div style="display:flex;background:rgba(0,0,0,0.04);border-radius:20px;padding:3px;gap:2px">
+        ${tabBtn("overview","Overview")}
+        ${tabBtn("cashflow","Cash Flow")}
+        ${tabBtn("rentroll","Rent Roll")}
+        ${tabBtn("expirations","Expirations")}
       </div>
     </div>
-
-    ${gap > 0
-      ? `<div style="margin-top:12px;background:#FFF2F2;border-radius:var(--radius);padding:12px 14px;font-size:12px;color:#FF3B30">
-          Counter at <strong>${fmt$(target100)}</strong>${targetPsf?` ($${Math.round(targetPsf)}/SF)`:""} — ${Math.abs(gapPct).toFixed(1)}% below asking — to hit 100% ROI over ${HOLD_YEARS} years.
-        </div>`
-      : `<div style="margin-top:12px;background:#F0FFF4;border-radius:var(--radius);padding:12px 14px;font-size:12px;color:#34C759">
-          Asking price already delivers 100%+ ROI over ${HOLD_YEARS} years at a ${exitCap}% exit cap.
-        </div>`}
+    ${content}
   </div>`;
 }
 
@@ -1785,8 +2108,8 @@ function renderDealDetail(d) {
   // Analysis Summary
   h += `<div id="deal-analysis-summary">` + renderDealSummary(d, tenants) + `</div>`;
 
-  // How to Counter
-  h += `<div id="deal-how-to-counter">` + renderHowToCounter(d) + `</div>`;
+  // How to Counter → Financial Analysis
+  h += `<div id="deal-how-to-counter">` + renderFinancialAnalysis(d) + `</div>`;
 
   // Broker section
   if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
@@ -1923,7 +2246,7 @@ function wireDealDetailEvents() {
 
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview"; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
@@ -1935,7 +2258,7 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 };
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = null; state.dealDetailFinTab = "overview";
     await saveDealsToSheet(); render();
   });
 
@@ -2001,7 +2324,7 @@ function wireDealDetailEvents() {
         const isVacant = creditType.toLowerCase() === "vacant" || tenantName.toLowerCase() === "vacant";
         const tenantEvts = leaseEvents.filter(e => e.tenantName === tenantName && e.suite === suite);
         const lsType = tenantEvts.length && tenantEvts[tenantEvts.length-1].leaseType ? tenantEvts[tenantEvts.length-1].leaseType : "";
-        tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),isVacant,creditType,leaseSchedule:tenantEvts});
+        tenants.push({name:tenantName,suite,sqft:gla,leaseType:isVacant?"vacant":(lsType||"nnn"),leaseStart:ls,leaseEnd:le,isMTM,rentPerSf:strip$(row[9]),annualRent:strip$(row[7]),annualRecovery:strip$(row[10]),recoveryPerSf:strip$(row[12]),totalRevenue:strip$(row[13]),isVacant,creditType,leaseSchedule:tenantEvts});
       }
       state.dealDetailTenants = tenants;
       state.dealDetailSynced = true;
@@ -2033,6 +2356,25 @@ function wireDealDetailEvents() {
           const exitCapVal = exitCapData.values?.[0]?.[0];
           state.dealDetailLoanData.exitCap = parseFloat((exitCapVal||"").toString().replace(/[%,%]/g,"")) || 0;
         } catch(e) { state.dealDetailLoanData.exitCap = 0; }
+      // Fetch IRR cashflows Rent Roll!N3:N6, equity in Analysis!B24, acq date Expenses!C6
+      try {
+        const [irrResp, equityResp, acqResp] = await Promise.all([
+          fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Rent Roll'!N3:N6", {headers:{"Authorization":"Bearer "+state.accessToken}}),
+          fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Analysis'!B24", {headers:{"Authorization":"Bearer "+state.accessToken}}),
+          fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Expenses'!C6", {headers:{"Authorization":"Bearer "+state.accessToken}})
+        ]);
+        const irrData = await irrResp.json();
+        const equityData = await equityResp.json();
+        const acqData = await acqResp.json();
+        const stripN = v => parseFloat((v||"").toString().replace(/[$,()]/g, s => s==='('?'-':''). replace(/[^0-9.-]/g,"")) || 0;
+        state.dealDetailIRRCashflows = (irrData.values || []).map(r => stripN(r[0]));
+        state.dealDetailEquityIn = Math.abs(stripN(equityData.values?.[0]?.[0]));
+        const acqRaw = (acqData.values?.[0]?.[0] || "").toString().trim();
+        // Parse "Month YYYY" format from Expenses!C6
+        const months = {january:0,february:1,march:2,april:3,may:4,june:5,july:6,august:7,september:8,october:9,november:10,december:11};
+        const mMatch = acqRaw.toLowerCase().match(/^([a-z]+)\s+(\d{4})$/);
+        state.dealDetailAcqDate = mMatch ? new Date(parseInt(mMatch[2]), months[mMatch[1]] || 0, 1) : new Date();
+      } catch(e) { state.dealDetailIRRCashflows = []; state.dealDetailEquityIn = 0; state.dealDetailAcqDate = new Date(); }
       } catch(e) { state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; }
       // Also fetch Comps from Call to Broker tab (B16:J100 — skip col A which is empty)
       try {
@@ -2048,9 +2390,9 @@ function wireDealDetailEvents() {
       // Refresh summary
       const summaryEl = document.getElementById("deal-analysis-summary");
       if (summaryEl) summaryEl.innerHTML = renderDealSummary(d, tenants);
-      // Refresh how to counter
+      // Refresh how to counter → now financial analysis
       const counterEl = document.getElementById("deal-how-to-counter");
-      if (counterEl) counterEl.innerHTML = renderHowToCounter(d);
+      if (counterEl) counterEl.innerHTML = renderFinancialAnalysis(d);
       syncBtn.textContent = "Re-sync from UW"; syncBtn.style.pointerEvents = "auto";
     } catch(e) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>'; syncBtn.textContent = "View Tenants"; syncBtn.style.pointerEvents = "auto"; }
   });
