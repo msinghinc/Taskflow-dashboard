@@ -1665,82 +1665,134 @@ function vacancyMonths(sqft) {
 // Returns array of 48 monthly net cashflows (operating only, no debt service, no acquisition)
 function buildTILCModel(tenants, marketRent, acqDate) {
   const MONTHS = 48;
-  const monthlyCF = new Array(MONTHS).fill(0); // net operating CF per month
-  const tilcEvents = []; // for display
-
   if (!acqDate) acqDate = new Date();
+
+  // Per-month arrays — all separate, never mixed
+  const baseRent    = new Array(MONTHS).fill(0);
+  const recoveryRent = new Array(MONTHS).fill(0);
+  const freeRentLoss = new Array(MONTHS).fill(0); // base rent foregone during free rent
+  const vacancyLoss  = new Array(MONTHS).fill(0); // base + recovery foregone during vacancy
+  const tiCosts     = new Array(MONTHS).fill(0);
+  const lcCosts     = new Array(MONTHS).fill(0);
+
+  // Per-tenant proforma for rent roll display
+  // Each entry: { name, suite, sqft, yearStatus: [{yr, status, rentPsf}] }
+  const tenantProforma = [];
+  const tilcEvents = [];
 
   tenants.forEach(t => {
     if (!t.sqft) return;
     const adjMR = adjMarketRent(marketRent, t.sqft);
-    const monthlyBaseRent = (t.annualRent || 0) / 12;
-    const monthlyRecovery = (t.annualRecovery || 0) / 12;
-    const rentPerSf = t.rentPerSf || 0;
+    const monthlyBase = (t.annualRent || 0) / 12;
+    const monthlyRec  = (t.annualRecovery || 0) / 12;
+    const rentPerSf   = t.rentPerSf || 0;
+    const newMonthlyBase = adjMR * t.sqft / 12;
 
-    // Add base income for occupied tenants for their current lease term
-    if (!t.isVacant) {
-      // Determine lease end month relative to acqDate
-      let leaseEndMonth = MONTHS; // default: lasts full hold
-      if (t.leaseEnd && !t.isMTM) {
-        const leEnd = new Date(t.leaseEnd + "T00:00:00");
-        const mDiff = (leEnd.getFullYear() - acqDate.getFullYear()) * 12 + (leEnd.getMonth() - acqDate.getMonth());
-        leaseEndMonth = Math.max(0, Math.min(MONTHS, mDiff));
-      } else if (t.isMTM) {
-        // MTM — check if below 50% of market
-        const pctOfMarket = adjMR > 0 ? rentPerSf / adjMR : 1;
-        leaseEndMonth = pctOfMarket < 0.5 ? 0 : MONTHS; // below 50% market → treat as expired now
-      }
+    // Weighted expected values (deterministic)
+    const expFreeRentMo = Math.round(0.75 * 2); // 75% chance of 2-3 mo free rent → ~2 months
+    const expVacMo      = Math.round(0.25 * vacancyMonths(t.sqft));
+    const expTI         = ((0.75 * 10) + (0.25 * 25)) * t.sqft;         // $13.75/SF
+    const expLC         = ((0.75 * 0.04) + (0.25 * 0.06)) * adjMR * t.sqft * 5; // 4.5%
 
-      // Add income for lease term
-      for (let m = 0; m < leaseEndMonth && m < MONTHS; m++) {
-        monthlyCF[m] += monthlyBaseRent + monthlyRecovery;
-      }
-
-      // Handle lease event at expiry
-      if (leaseEndMonth < MONTHS) {
-        const isRenewal = Math.random() < 0.75; // weighted 75/25
-        const newRent = adjMR * t.sqft / 12;
-        const newRecovery = monthlyRecovery; // assume same recoveries
-
-        if (isRenewal) {
-          // 3 months free rent (recoveries only), then full rent
-          const freeEnd = Math.min(leaseEndMonth + 3, MONTHS);
-          for (let m = leaseEndMonth; m < freeEnd; m++) monthlyCF[m] += monthlyRecovery;
-          const tiCost = 10 * t.sqft;
-          const lcCost = 0.04 * (adjMR * t.sqft * 5);
-          if (leaseEndMonth < MONTHS) { monthlyCF[leaseEndMonth] -= (tiCost + lcCost); }
-          for (let m = freeEnd; m < MONTHS; m++) monthlyCF[m] += newRent + newRecovery;
-          tilcEvents.push({ month: leaseEndMonth, tenant: t.name, suite: t.suite, sqft: t.sqft, type: "Renewal", ti: tiCost, lc: lcCost, freeRent: 3, newRentPsf: adjMR });
-        } else {
-          // Vacancy period
-          const vacMo = vacancyMonths(t.sqft);
-          const newLeaseStart = Math.min(leaseEndMonth + vacMo, MONTHS);
-          const tiCost = 25 * t.sqft;
-          const lcCost = 0.06 * (adjMR * t.sqft * 5);
-          if (newLeaseStart < MONTHS) { monthlyCF[newLeaseStart] -= (tiCost + lcCost); }
-          for (let m = newLeaseStart; m < MONTHS; m++) monthlyCF[m] += newRent + newRecovery;
-          tilcEvents.push({ month: leaseEndMonth, tenant: t.name, suite: t.suite, sqft: t.sqft, type: "New Tenant", ti: tiCost, lc: lcCost, vacancy: vacMo, newRentPsf: adjMR });
-        }
-      }
-    } else {
-      // Currently vacant — new tenant scenario
-      const vacMo = vacancyMonths(t.sqft);
-      const newRent = adjMR * t.sqft / 12;
-      const tiCost = 25 * t.sqft;
-      const lcCost = 0.06 * (adjMR * t.sqft * 5);
-      if (vacMo < MONTHS) { monthlyCF[vacMo] -= (tiCost + lcCost); }
-      for (let m = vacMo; m < MONTHS; m++) monthlyCF[m] += newRent + monthlyRecovery;
-      tilcEvents.push({ month: 0, tenant: t.name + " (Vacant)", suite: t.suite, sqft: t.sqft, type: "Vacant→New", ti: tiCost, lc: lcCost, vacancy: vacMo, newRentPsf: adjMR });
+    // Determine when lease ends relative to acq (in months)
+    let leaseEndMonth = MONTHS; // default: active whole hold
+    if (t.isVacant) {
+      leaseEndMonth = 0;
+    } else if (t.isMTM) {
+      const pctOfMarket = adjMR > 0 ? rentPerSf / adjMR : 1;
+      leaseEndMonth = pctOfMarket < 0.5 ? 0 : 12; // below 50% → immediate, else assume ~1yr
+    } else if (t.leaseEnd) {
+      const leEnd = new Date(t.leaseEnd + "T00:00:00");
+      const mDiff = (leEnd.getFullYear() - acqDate.getFullYear()) * 12
+                  + (leEnd.getMonth() - acqDate.getMonth());
+      leaseEndMonth = Math.max(0, Math.min(MONTHS, mDiff));
     }
+
+    // Phase 1: income during active lease
+    for (let m = 0; m < Math.min(leaseEndMonth, MONTHS); m++) {
+      baseRent[m]     += monthlyBase;
+      recoveryRent[m] += monthlyRec;
+    }
+
+    // Phase 2: lease event costs hit at expiry month
+    if (leaseEndMonth < MONTHS || t.isVacant) {
+      const costMonth = Math.min(leaseEndMonth, MONTHS - 1);
+      tiCosts[costMonth] += expTI;
+      lcCosts[costMonth] += expLC;
+
+      // Phase 3: free rent period (base foregone, recovery continues)
+      const freeStart = leaseEndMonth;
+      const freeEnd   = Math.min(freeStart + expFreeRentMo, MONTHS);
+      for (let m = freeStart; m < freeEnd; m++) {
+        recoveryRent[m] += monthlyRec; // recovery still collected
+        freeRentLoss[m] += newMonthlyBase; // track lost base rent
+      }
+
+      // Phase 4: vacancy period (nothing collected)
+      const vacStart = freeEnd;
+      const vacEnd   = Math.min(vacStart + expVacMo, MONTHS);
+      for (let m = vacStart; m < vacEnd; m++) {
+        vacancyLoss[m] += newMonthlyBase + monthlyRec;
+      }
+
+      // Phase 5: new lease income starts
+      const newLeaseStart = Math.min(t.isVacant ? expVacMo : freeEnd + expVacMo, MONTHS);
+      for (let m = newLeaseStart; m < MONTHS; m++) {
+        baseRent[m]     += newMonthlyBase;
+        recoveryRent[m] += monthlyRec;
+      }
+
+      tilcEvents.push({
+        month: leaseEndMonth, tenant: t.name, suite: t.suite, sqft: t.sqft,
+        ti: expTI, lc: expLC, freeRentMo: expFreeRentMo, vacMo: expVacMo,
+        newRentPsf: adjMR, newLeaseStart
+      });
+    }
+
+    // Build per-year status for pro forma rent roll
+    const yearStatus = [];
+    for (let yr = 0; yr < 4; yr++) {
+      const midMonth = yr * 12 + 6; // use mid-year as representative
+      let status, rentPsf;
+      if (t.isVacant && midMonth < expVacMo) {
+        status = "Vacant"; rentPsf = 0;
+      } else if (midMonth < leaseEndMonth) {
+        status = "Active"; rentPsf = rentPerSf;
+      } else if (midMonth < leaseEndMonth + expFreeRentMo) {
+        status = "Free Rent"; rentPsf = 0;
+      } else if (midMonth < leaseEndMonth + expFreeRentMo + expVacMo) {
+        status = "Vacant"; rentPsf = 0;
+      } else {
+        status = leaseEndMonth < MONTHS || t.isVacant ? "New Tenant" : "Active";
+        rentPsf = leaseEndMonth < MONTHS || t.isVacant ? adjMR : rentPerSf;
+      }
+      yearStatus.push({ status, rentPsf });
+    }
+    tenantProforma.push({ name: t.name, suite: t.suite, sqft: t.sqft, isVacant: t.isVacant, leaseEnd: t.leaseEnd, isMTM: t.isMTM, currentRentPsf: rentPerSf, adjMarketRentPsf: adjMR, yearStatus });
   });
 
-  // Roll up to annual
-  const annualCF = [0, 0, 0, 0];
+  // Roll up to annual — all separate line items
+  const annual = Array.from({length:4}, () => ({
+    baseRent:0, recoveryRent:0, freeRentLoss:0, vacancyLoss:0, tiCosts:0, lcCosts:0
+  }));
   for (let m = 0; m < MONTHS; m++) {
-    annualCF[Math.floor(m / 12)] += monthlyCF[m];
+    const yr = Math.floor(m / 12);
+    annual[yr].baseRent     += baseRent[m];
+    annual[yr].recoveryRent += recoveryRent[m];
+    annual[yr].freeRentLoss += freeRentLoss[m];
+    annual[yr].vacancyLoss  += vacancyLoss[m];
+    annual[yr].tiCosts      += tiCosts[m];
+    annual[yr].lcCosts      += lcCosts[m];
   }
+  annual.forEach(yr => {
+    yr.grossIncome  = yr.baseRent + yr.recoveryRent - yr.freeRentLoss - yr.vacancyLoss;
+    yr.netOperatingCF = yr.grossIncome - yr.tiCosts - yr.lcCosts;
+  });
 
-  return { monthlyCF, annualCF, tilcEvents };
+  // annualCF for solver (net operating CF per year)
+  const annualCF = annual.map(yr => yr.netOperatingCF);
+
+  return { annual, annualCF, tilcEvents, tenantProforma };
 }
 
 // Solve target price for 100% ROI
@@ -1893,52 +1945,65 @@ function renderFinancialAnalysis(d) {
   }
 
   else if (activeTab === "cashflow") {
-    const years = acqDate ? [acqDate.getFullYear(), acqDate.getFullYear()+1, acqDate.getFullYear()+2, acqDate.getFullYear()+3] : [1,2,3,4];
+    const years = acqDate ? [acqDate.getFullYear(), acqDate.getFullYear()+1, acqDate.getFullYear()+2, acqDate.getFullYear()+3] : ["Yr 1","Yr 2","Yr 3","Yr 4"];
     const annualDS = askingMetrics ? askingMetrics.annualDS : 0;
-    const annualTILC = [0,0,0,0];
-    tilcModel.tilcEvents.forEach(ev => {
-      const yr = Math.floor(ev.month / 12);
-      if (yr < 4) annualTILC[yr] += (ev.ti || 0) + (ev.lc || 0);
-    });
+    const a = tilcModel.annual;
 
-    content += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead><tr style="border-bottom:1px solid var(--border)">
-        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Line Item</th>
-        ${years.map(y=>`<th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:600;color:var(--text)">${y}</th>`).join("")}
-      </tr></thead>
-      <tbody>`;
-
-    // NOI row
-    content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Gross Operating Income</td>${tilcModel.annualCF.map((cf,i)=>{
-      const tilc = annualTILC[i];
-      const grossIncome = cf + tilc; // add back TILC to get gross
-      return `<td style="text-align:right;padding:8px 12px;font-weight:500">${fmt$(grossIncome)}</td>`;
-    }).join("")}</tr>`;
-
-    // TILC
-    content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">TILC Costs</td>${annualTILC.map(t=>`<td style="text-align:right;padding:8px 12px;color:#FF3B30;font-weight:500">${t > 0 ? "-"+fmt$(t) : "—"}</td>`).join("")}</tr>`;
-
-    // Net operating CF
-    content += `<tr style="border-bottom:1px solid var(--border-light);background:rgba(0,0,0,0.02)"><td style="padding:8px 12px;font-weight:600;color:var(--text)">Net Operating CF</td>${tilcModel.annualCF.map(cf=>`<td style="text-align:right;padding:8px 12px;font-weight:600;color:${cf>=0?"var(--text)":"#FF3B30"}">${fmt$(cf)}</td>`).join("")}</tr>`;
-
-    // Debt service
-    content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Debt Service</td>${[0,0,0,0].map(()=>`<td style="text-align:right;padding:8px 12px;color:#FF3B30;font-weight:500">${annualDS > 0 ? "-"+fmt$(annualDS) : "—"}</td>`).join("")}</tr>`;
-
-    // Cash flow after DS
-    if (askingMetrics) {
-      content += `<tr style="border-bottom:2px solid var(--border);background:rgba(0,0,0,0.02)"><td style="padding:8px 12px;font-weight:600;color:var(--text)">Cash Flow After DS</td>${askingMetrics.annualCF.map(cf=>`<td style="text-align:right;padding:8px 12px;font-weight:700;color:${cf>=0?"#34C759":"#FF3B30"}">${fmt$(cf)}</td>`).join("")}</tr>`;
+    function row(label, vals, opts={}) {
+      const { bold, color, negative, subtotal, indent } = opts;
+      const tdStyle = `text-align:right;padding:7px 12px;font-weight:${bold?'600':'400'};${color?'color:'+color:''}`;
+      const labelStyle = `padding:7px 12px;${indent?'padding-left:24px;':''}color:${bold?'var(--text)':'var(--text-secondary)'};font-weight:${bold?'600':'400'}`;
+      const rowStyle = subtotal ? 'border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:rgba(0,0,0,0.02)' : 'border-bottom:1px solid var(--border-light)';
+      return `<tr style="${rowStyle}"><td style="${labelStyle}">${label}</td>${vals.map(v=>{
+        const isNeg = negative || v < 0;
+        const c = color || (isNeg ? '#FF3B30' : 'var(--text)');
+        return `<td style="text-align:right;padding:7px 12px;font-weight:${bold?'600':'400'};color:${c}">${v===0?'—':isNeg&&v>0?'-'+fmt$(v):fmt$(v)}</td>`;
+      }).join('')}</tr>`;
     }
 
-    // Exit row (Year 4 only)
+    content += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:2px solid var(--border)">
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted);width:200px">Line Item</th>
+        ${years.map(y=>`<th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:600;color:var(--text)">${y}</th>`).join("")}
+      </tr></thead><tbody>`;
+
+    // Income section
+    content += `<tr><td colspan="5" style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Income</td></tr>`;
+    content += row("Base Rent", a.map(yr=>yr.baseRent));
+    content += row("Recovery Income", a.map(yr=>yr.recoveryRent));
+    content += row("Free Rent Concessions", a.map(yr=>yr.freeRentLoss), {negative:true, color:'#FF9F0A', indent:true});
+    content += row("Vacancy Loss", a.map(yr=>yr.vacancyLoss), {negative:true, color:'#FF3B30', indent:true});
+    content += row("Gross Operating Income", a.map(yr=>yr.grossIncome), {bold:true, subtotal:true});
+
+    // TILC section
+    content += `<tr><td colspan="5" style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">TILC</td></tr>`;
+    content += row("Tenant Improvements", a.map(yr=>yr.tiCosts), {negative:true, color:'#FF3B30', indent:true});
+    content += row("Leasing Commissions", a.map(yr=>yr.lcCosts), {negative:true, color:'#FF3B30', indent:true});
+    content += row("Net Operating CF", a.map(yr=>yr.netOperatingCF), {bold:true, subtotal:true});
+
+    // Debt service
+    if (annualDS > 0) {
+      content += `<tr><td colspan="5" style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Financing</td></tr>`;
+      content += row("Debt Service", [annualDS,annualDS,annualDS,annualDS], {negative:true, indent:true});
+      if (askingMetrics) {
+        content += row("Cash Flow After DS", askingMetrics.annualCF, {bold:true, subtotal:true});
+      }
+    }
+
+    // Exit (Year 4 only)
     if (exitValue && askingMetrics) {
-      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Exit Value</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="text-align:right;padding:8px 12px;font-weight:500">${fmt$(exitValue)}</td></tr>`;
-      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:8px 12px;color:var(--text-secondary)">Loan Payoff</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="padding:8px 12px">—</td><td style="text-align:right;padding:8px 12px;color:#FF3B30;font-weight:500">-${fmt$(askingMetrics.loanPayoff)}</td></tr>`;
+      content += `<tr><td colspan="5" style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Exit (Year 4)</td></tr>`;
+      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:7px 12px;padding-left:24px;color:var(--text-secondary)">Exit Value @ ${exitCap}% Cap</td><td>—</td><td>—</td><td>—</td><td style="text-align:right;padding:7px 12px;color:#34C759;font-weight:500">${fmt$(exitValue)}</td></tr>`;
+      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:7px 12px;padding-left:24px;color:var(--text-secondary)">Loan Payoff</td><td>—</td><td>—</td><td>—</td><td style="text-align:right;padding:7px 12px;color:#FF3B30;font-weight:500">-${fmt$(askingMetrics.loanPayoff)}</td></tr>`;
+      const netExit = exitValue - askingMetrics.loanPayoff;
+      content += `<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:7px 12px;padding-left:24px;color:var(--text-secondary)">Net Exit Proceeds</td><td>—</td><td>—</td><td>—</td><td style="text-align:right;padding:7px 12px;font-weight:600;color:${netExit>=0?'#34C759':'#FF3B30'}">${fmt$(netExit)}</td></tr>`;
     }
 
     content += `</tbody></table></div>`;
   }
 
   else if (activeTab === "rentroll") {
+    // Current rent roll — contract vs market
     const totalGLA = tenants.reduce((s,t) => s+(t.sqft||0), 0);
     const totalRent = tenants.filter(t=>!t.isVacant).reduce((s,t) => s+(t.annualRent||0), 0);
     content += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -1951,33 +2016,68 @@ function renderFinancialAnalysis(d) {
         <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Market $/SF</th>
         <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Variance</th>
         <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Lease End</th>
-        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">% Revenue</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">% Rev</th>
       </tr></thead><tbody>`;
-
     tenants.forEach(t => {
       const adjMR = adjMarketRent(marketRent, t.sqft);
       const variance = adjMR > 0 && t.rentPerSf ? t.rentPerSf - adjMR : null;
       const varPct = adjMR > 0 && t.rentPerSf ? (t.rentPerSf - adjMR) / adjMR * 100 : null;
       const revPct = totalRent > 0 && t.annualRent ? t.annualRent / totalRent * 100 : 0;
       const glaPct = totalGLA > 0 ? (t.sqft||0) / totalGLA * 100 : 0;
-      const isVacant = t.isVacant;
       content += `<tr style="border-bottom:1px solid var(--border-light)">
-        <td style="padding:8px 12px;font-weight:${isVacant?'400':'500'};color:${isVacant?'var(--text-muted)':'var(--text)'}">${esc(t.name)}${isVacant?' <span style="font-size:9px;background:#FFF3CD;color:#856404;padding:1px 5px;border-radius:3px;margin-left:4px">VACANT</span>':''}</td>
+        <td style="padding:8px 12px;font-weight:${t.isVacant?'400':'500'};color:${t.isVacant?'var(--text-muted)':'var(--text)'}">${esc(t.name)}${t.isVacant?' <span style="font-size:9px;background:#FEF3C7;color:#92400E;padding:1px 5px;border-radius:10px;margin-left:4px">VACANT</span>':''}</td>
         <td style="padding:8px 12px;color:var(--text-muted)">${esc(t.suite||"—")}</td>
         <td style="text-align:right;padding:8px 12px">${fmtNum(t.sqft)}</td>
         <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${glaPct.toFixed(1)}%</td>
-        <td style="text-align:right;padding:8px 12px">${t.rentPerSf ? "$"+t.rentPerSf.toFixed(2) : "—"}</td>
-        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${adjMR ? "$"+adjMR.toFixed(2) : "—"}</td>
+        <td style="text-align:right;padding:8px 12px">${t.rentPerSf?"$"+t.rentPerSf.toFixed(2):"—"}</td>
+        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${adjMR?"$"+adjMR.toFixed(2):"—"}</td>
         <td style="text-align:right;padding:8px 12px;font-weight:500;color:${variance===null?'var(--text-muted)':variance>=0?'#34C759':'#FF3B30'}">${variance!==null?(variance>=0?"+":"")+variance.toFixed(2)+" ("+varPct.toFixed(0)+"%)":"—"}</td>
         <td style="text-align:right;padding:8px 12px;color:${t.isMTM?'#FF9F0A':'var(--text-secondary)'}">${t.isMTM?"MTM":(t.leaseEnd||"—")}</td>
-        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${revPct > 0 ? revPct.toFixed(1)+"%" : "—"}</td>
+        <td style="text-align:right;padding:8px 12px;color:var(--text-muted)">${revPct>0?revPct.toFixed(1)+"%":"—"}</td>
       </tr>`;
     });
     content += `</tbody></table></div>`;
   }
 
+  else if (activeTab === "proforma") {
+    // 4-year pro forma rent roll — shows status per year per tenant
+    const years = acqDate ? [acqDate.getFullYear(), acqDate.getFullYear()+1, acqDate.getFullYear()+2, acqDate.getFullYear()+3] : ["Yr 1","Yr 2","Yr 3","Yr 4"];
+    const statusColors = { "Active":"#34C759", "Free Rent":"#FF9F0A", "Vacant":"#FF3B30", "New Tenant":"#0071E3" };
+
+    content += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Tenant</th>
+        <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Suite</th>
+        <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">SF</th>
+        ${years.map(y=>`<th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:600;color:var(--text)">${y}</th>`).join("")}
+      </tr></thead><tbody>`;
+
+    tilcModel.tenantProforma.forEach(t => {
+      content += `<tr style="border-bottom:1px solid var(--border-light)">
+        <td style="padding:8px 12px;font-weight:500;color:${t.isVacant?'var(--text-muted)':'var(--text)'}">${esc(t.name)}</td>
+        <td style="padding:8px 12px;color:var(--text-muted)">${esc(t.suite||"—")}</td>
+        <td style="text-align:right;padding:8px 12px">${fmtNum(t.sqft)}</td>
+        ${t.yearStatus.map(ys => {
+          const color = statusColors[ys.status] || 'var(--text-muted)';
+          const rentStr = ys.rentPsf > 0 ? `$${ys.rentPsf.toFixed(2)}/SF` : "—";
+          return `<td style="text-align:center;padding:6px 12px">
+            <div style="font-size:9px;font-weight:600;color:${color};background:${color}15;border-radius:10px;padding:2px 7px;display:inline-block;margin-bottom:2px">${ys.status}</div>
+            <div style="font-size:10px;color:var(--text-muted)">${rentStr}</div>
+          </td>`;
+        }).join("")}
+      </tr>`;
+    });
+
+    // Total row — annual base rent
+    content += `<tr style="border-top:2px solid var(--border);background:rgba(0,0,0,0.02)">
+      <td colspan="3" style="padding:8px 12px;font-weight:600;color:var(--text)">Total Base Rent</td>
+      ${tilcModel.annual.map(yr=>`<td style="text-align:center;padding:8px 12px;font-weight:700;color:var(--text)">${fmt$(yr.baseRent)}</td>`).join("")}
+    </tr>`;
+
+    content += `</tbody></table></div>`;
+  }
+
   else if (activeTab === "expirations") {
-    // Group expirations by year
     const expByYear = {};
     tenants.forEach(t => {
       if (!t.leaseEnd || t.isVacant) return;
@@ -1986,16 +2086,15 @@ function renderFinancialAnalysis(d) {
       expByYear[yr].push(t);
     });
     const totalGLA = tenants.reduce((s,t) => s+(t.sqft||0), 0);
-
-    // Bar chart
     const years = Object.keys(expByYear).sort();
-    const maxSF = Math.max(...years.map(y => expByYear[y].reduce((s,t) => s+(t.sqft||0), 0)));
+    const maxSF = years.length ? Math.max(...years.map(y => expByYear[y].reduce((s,t) => s+(t.sqft||0), 0))) : 1;
+
     content += `<div style="display:flex;align-items:flex-end;gap:8px;height:160px;margin-bottom:20px;padding:0 4px">`;
     years.forEach(yr => {
       const sf = expByYear[yr].reduce((s,t) => s+(t.sqft||0), 0);
       const pct = totalGLA > 0 ? (sf/totalGLA*100).toFixed(1) : 0;
       const h = maxSF > 0 ? Math.max(8, Math.round(sf/maxSF*120)) : 8;
-      const color = yr === "MTM" ? "#FF9F0A" : parseFloat(pct) > 30 ? "#FF3B30" : parseFloat(pct) > 15 ? "#FF9F0A" : "#0071E3";
+      const color = yr==="MTM"?"#FF9F0A":parseFloat(pct)>30?"#FF3B30":parseFloat(pct)>15?"#FF9F0A":"#0071E3";
       content += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
         <div style="font-size:10px;font-weight:700;color:${color}">${pct}%</div>
         <div style="width:100%;height:${h}px;background:${color};border-radius:4px 4px 0 0;opacity:0.85"></div>
@@ -2005,7 +2104,6 @@ function renderFinancialAnalysis(d) {
     });
     content += `</div>`;
 
-    // Expiration table
     content += `<table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="border-bottom:1px solid var(--border)">
         <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:500;color:var(--text-muted)">Expiration</th>
@@ -2036,7 +2134,7 @@ function renderFinancialAnalysis(d) {
       content += `<tr style="border-bottom:1px solid var(--border);background:rgba(0,0,0,0.02)">
         <td colspan="2" style="padding:6px 12px;font-weight:600;color:var(--text);font-size:11px">${yr} Total</td>
         <td style="text-align:right;padding:6px 12px;font-weight:600">${fmtNum(yrSF)}</td>
-        <td style="text-align:right;padding:6px 12px;font-weight:600;color:var(--text-muted)">${totalGLA>0?(yrSF/totalGLA*100).toFixed(1):0}%</td>
+        <td style="text-align:right;padding:6px 12px;color:var(--text-muted)">${totalGLA>0?(yrSF/totalGLA*100).toFixed(1):0}%</td>
         <td colspan="3"></td>
       </tr>`;
     });
@@ -2044,12 +2142,13 @@ function renderFinancialAnalysis(d) {
   }
 
   return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;box-shadow:var(--shadow-sm)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <div style="font-size:17px;font-weight:600;color:var(--text);letter-spacing:-0.3px">Financial Analysis</div>
-      <div style="display:flex;background:rgba(0,0,0,0.04);border-radius:20px;padding:3px;gap:2px">
+      <div style="display:flex;background:rgba(0,0,0,0.04);border-radius:20px;padding:3px;gap:2px;flex-wrap:wrap">
         ${tabBtn("overview","Overview")}
         ${tabBtn("cashflow","Cash Flow")}
         ${tabBtn("rentroll","Rent Roll")}
+        ${tabBtn("proforma","Pro Forma")}
         ${tabBtn("expirations","Expirations")}
       </div>
     </div>
