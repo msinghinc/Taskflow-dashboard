@@ -2445,7 +2445,9 @@ function wireDealDetailEvents() {
       const rows = rrData.values; const tenants = [];
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]; const tenantName = (row[1]||"").trim();
-        if (!tenantName || tenantName === "Total" || tenantName === "Vacant " || tenantName === "Occupied") break;
+        // Stop only on truly empty rows or summary rows, not on "Vacant" tenants
+        if (!tenantName) break;
+        if (tenantName === "Total" || tenantName === "Occupied") break;
         const creditType = (row[0]||"").trim(); const suite = (row[2]||"").trim(); const gla = parseFloat(row[3])||0;
         const ls = (row[5]||"").toString().split("T")[0].split(" ")[0];
         const rawEnd = (row[6]||"").toString().trim(); const isMTM = rawEnd.toUpperCase() === "MTM";
