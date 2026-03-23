@@ -545,6 +545,7 @@ let state = {
   dealDetailTenants: [],
   dealDetailComps: [],
   dealDetailSynced: false,
+  dealDetailProFormaNoi: 0,
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -1231,14 +1232,43 @@ function calcCompsScore(d) {
   return 10;
 }
 function calcFinancialScore(d) {
-  if (!d.noi) return null;
-  let score = 0;
-  if (d.noi) score += 3;
-  if (d.capRate) score += 2;
-  if (d.uwLink) score += 2;
-  if (d.uwExpenseRatio) score += 1.5;
-  if (d.uwVacancy) score += 1.5;
-  return Math.min(10, score);
+  if (!state.dealDetailSynced) return null;
+
+  const tenants = state.dealDetailTenants;
+  const currentCap = parseFloat(d.capRate) || 0;
+  const askingPrice = parseFloat(d.askingPrice) || 0;
+  const proFormaNoi = state.dealDetailProFormaNoi || 0;
+  const proFormaCap = (askingPrice > 0 && proFormaNoi > 0) ? (proFormaNoi / askingPrice) * 100 : 0;
+
+  if (!currentCap && !proFormaCap) return null;
+
+  // Score current cap rate (0-4 points)
+  let currentScore = currentCap >= 8 ? 4 : currentCap >= 6 ? 3 : currentCap >= 4 ? 1.5 : 0.5;
+
+  // Score pro forma cap rate (0-4 points)
+  let pfScore = 0;
+  if (proFormaCap >= 15) pfScore = 4;
+  else if (proFormaCap >= 11) pfScore = 3.5;
+  else if (proFormaCap >= 9) pfScore = 2.5;
+  else if (proFormaCap >= 8) pfScore = 1.5;
+  else if (proFormaCap > 0) pfScore = 0.5;
+
+  // Spread bonus (0-2 points) tempered by achievability
+  const spread = proFormaCap - currentCap;
+  let spreadBonus = 0;
+  if (spread > 0 && proFormaCap > 0) {
+    const rawBonus = spread >= 8 ? 2 : spread >= 5 ? 1.5 : spread >= 3 ? 1 : spread >= 1 ? 0.5 : 0;
+    // Achievability based on largest vacant suite
+    const vacantSuites = tenants.filter(t => t.isVacant);
+    let achievability = 1.0;
+    if (vacantSuites.length) {
+      const maxVacantSf = Math.max(...vacantSuites.map(t => t.sqft || 0));
+      achievability = maxVacantSf > 10000 ? 0.25 : maxVacantSf > 5000 ? 0.5 : maxVacantSf > 1500 ? 0.7 : 0.9;
+    }
+    spreadBonus = rawBonus * achievability;
+  }
+
+  return Math.min(10, Math.round((currentScore + pfScore + spreadBonus) * 10) / 10);
 }
 function calcTenantCreditScore(tenants) {
   const active = (tenants || []).filter(t => !t.isVacant);
@@ -1255,20 +1285,103 @@ function calcTenantCreditScore(tenants) {
   return Math.round(weightedScore / totalRent * 10) / 10;
 }
 function calcLeaseRiskScore(tenants, walt) {
-  const active = (tenants || []).filter(t => !t.isVacant);
-  if (!active.length && !walt) return null;
-  const w = parseFloat(walt) || 0;
-  let score = w > 7 ? 10 : w > 5 ? 8 : w > 3 ? 6 : w > 1 ? 4 : 2;
-  const hasMTM = active.some(t => t.isMTM || (t.leaseEnd || "").toUpperCase() === "MTM");
-  if (hasMTM) score -= 2;
+  if (!state.dealDetailSynced) return null;
+  const allTenants = tenants || [];
+  if (!allTenants.length) return null;
+
   const now = Date.now();
-  const in24mo = now + 730 * 864e5;
-  active.forEach(t => {
-    if (!t.leaseEnd || t.isMTM) return;
-    const end = new Date(t.leaseEnd + "T00:00:00").getTime();
-    if (end < in24mo) score -= 1;
+  const DAY = 864e5;
+  const marketRent = parseFloat(state.deals.find(d => d.id === state.selectedDealDetail)?.marketRent) || 0;
+  const totalGLA = allTenants.reduce((s, t) => s + (t.sqft || 0), 0);
+  const activeTenants = allTenants.filter(t => !t.isVacant);
+  const vacantTenants = allTenants.filter(t => t.isVacant);
+  const totalGrossRent = activeTenants.reduce((s, t) => s + (t.annualRent || 0), 0);
+  const tenantCount = activeTenants.length;
+
+  // Adjusted market rent by suite size
+  function adjMarket(sqft) {
+    if (!marketRent) return 0;
+    if (sqft < 1500) return marketRent * 0.8;
+    if (sqft < 5000) return marketRent * 0.7;
+    if (sqft < 10000) return marketRent * 0.6;
+    return marketRent * 0.5;
+  }
+
+  // Tenure in years from lease start
+  function tenureYears(leaseStart) {
+    if (!leaseStart) return 0;
+    return (now - new Date(leaseStart + "T00:00:00").getTime()) / (365 * DAY);
+  }
+
+  // Per-tenant risk score (0=max risk, 10=no risk)
+  function tenantRiskScore(t) {
+    const sfPct = totalGLA > 0 ? (t.sqft || 0) / totalGLA : 0;
+    const tenure = tenureYears(t.leaseStart);
+    const adj = adjMarket(t.sqft);
+    const aboveMarket = adj > 0 && (t.rentPerSf || 0) > adj;
+    const belowMarket = adj > 0 && (t.rentPerSf || 0) < adj;
+
+    // Tenure modifier (0.7-1.3 multiplier on risk)
+    const tenureMod = tenure >= 10 ? 0.7 : tenure >= 5 ? 0.85 : tenure >= 2 ? 1.0 : 1.3;
+
+    let risk = 0; // higher = more risky
+
+    if (t.isMTM || (t.leaseEnd || "").toUpperCase() === "MTM") {
+      // MTM — scored by tenure
+      const mtmRisk = tenure >= 10 ? 1 : tenure >= 5 ? 2 : tenure >= 2 ? 4 : 7;
+      risk = mtmRisk;
+    } else {
+      // Non-MTM — scored by urgency
+      const leaseEndMs = t.leaseEnd ? new Date(t.leaseEnd + "T00:00:00").getTime() : 0;
+      const monthsLeft = leaseEndMs ? (leaseEndMs - now) / (30 * DAY) : 999;
+      const urgencyRisk = monthsLeft <= 6 ? 8 : monthsLeft <= 18 ? 5 : monthsLeft <= 24 ? 3 : 1;
+      risk = urgencyRisk * tenureMod;
+    }
+
+    // Health modifier — below market reduces risk (upside), above market amplifies it
+    if (belowMarket) risk *= 0.6;
+    else if (aboveMarket) risk *= 1.4;
+
+    // Weight by SF % of GLA
+    return { weightedRisk: risk * sfPct, sfPct };
+  }
+
+  // Score active tenants
+  let totalWeightedRisk = 0;
+  let totalWeight = 0;
+  activeTenants.forEach(t => {
+    const { weightedRisk, sfPct } = tenantRiskScore(t);
+    totalWeightedRisk += weightedRisk;
+    totalWeight += sfPct;
   });
-  return Math.max(0, Math.min(10, score));
+
+  // Vacant suite penalties
+  vacantTenants.forEach(t => {
+    const sfPct = totalGLA > 0 ? (t.sqft || 0) / totalGLA : 0;
+    const adj = adjMarket(t.sqft);
+    // Vacancy is risky but size determines how risky
+    let vacRisk = t.sqft > 10000 ? 9 : t.sqft > 5000 ? 7 : t.sqft > 1500 ? 5 : 3;
+    // If market rent exists and space is small (easy to lease), reduce penalty
+    if (adj > 0 && t.sqft <= 1500) vacRisk *= 0.7;
+    totalWeightedRisk += vacRisk * sfPct;
+    totalWeight += sfPct;
+  });
+
+  // Convert weighted risk to 0-10 score (10 = low risk)
+  const avgRisk = totalWeight > 0 ? totalWeightedRisk / totalWeight : 0;
+  let score = Math.max(0, 10 - avgRisk);
+
+  // Concentration flag penalties
+  activeTenants.forEach(t => {
+    const revPct = totalGrossRent > 0 ? (t.annualRent || 0) / totalGrossRent : 0;
+    const highThreshold = tenantCount <= 4 ? 0.30 : 0.20;
+    const medThreshold = tenantCount <= 4 ? null : 0.30;
+    if (revPct > 0.30) score -= 1.5;
+    else if (medThreshold && revPct > medThreshold) score -= 0.75;
+    else if (revPct > highThreshold) score -= 0.5;
+  });
+
+  return Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 }
 function renderScorecard(d, tenants) {
   const CIRC = 175.9;
@@ -1531,7 +1644,7 @@ function wireDealDetailEvents() {
 
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
@@ -1543,7 +1656,7 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false;
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0;
     await saveDealsToSheet(); render();
   });
 
@@ -1613,6 +1726,13 @@ function wireDealDetailEvents() {
       }
       state.dealDetailTenants = tenants;
       state.dealDetailSynced = true;
+      // Fetch pro forma NOI from Expenses!E30
+      try {
+        const pfResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Expenses'!E30", {headers:{"Authorization":"Bearer "+state.accessToken}});
+        const pfData = await pfResp.json();
+        const pfVal = pfData.values && pfData.values[0] && pfData.values[0][0];
+        state.dealDetailProFormaNoi = parseFloat((pfVal||"").toString().replace(/[$,%]/g,"")) || 0;
+      } catch(e) { state.dealDetailProFormaNoi = 0; }
       // Also fetch Comps tab
       try {
         const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Comps'!A2:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
