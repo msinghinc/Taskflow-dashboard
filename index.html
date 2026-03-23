@@ -546,6 +546,7 @@ let state = {
   dealDetailComps: [],
   dealDetailSynced: false,
   dealDetailProFormaNoi: 0,
+  dealDetailLoanData: { rate: 0, amortYears: 0, downPct: 0 },
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -1647,6 +1648,86 @@ function renderDealSummary(d, tenants) {
   h += `</div>`;
   return h;
 }
+
+// ---- HOW TO COUNTER ----
+function renderHowToCounter(d) {
+  if (!state.dealDetailSynced) return "";
+  const noi = state.dealDetailProFormaNoi;
+  const { rate, amortYears, downPct } = state.dealDetailLoanData;
+  const sqft = parseFloat(d.sqft) || 0;
+  const askingPrice = parseFloat(d.askingPrice) || 0;
+
+  if (!noi || !rate || !amortYears || !downPct) {
+    return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">How to Counter</div>
+      <div style="font-size:12px;color:var(--text-muted)">Sync UW to calculate — needs pro forma NOI, rate, amortization and down payment.</div>
+    </div>`;
+  }
+
+  function monthlyPayment(loanAmt, annualRate, years) {
+    const r = annualRate / 100 / 12;
+    const n = years * 12;
+    if (r === 0) return loanAmt / n;
+    return loanAmt * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
+  }
+
+  function solveTargetPrice(targetCoc) {
+    let lo = 0, hi = noi * 50, price = 0;
+    for (let i = 0; i < 100; i++) {
+      price = (lo + hi) / 2;
+      const down = price * downPct / 100;
+      const loan = price - down;
+      const ds = monthlyPayment(loan, rate, amortYears) * 12;
+      const coc = (noi - ds) / down;
+      if (Math.abs(coc - targetCoc) < 0.0001) break;
+      if (coc < targetCoc) hi = price;
+      else lo = price;
+    }
+    return price;
+  }
+
+  const target100 = solveTargetPrice(1.0);
+  const targetPsf = sqft > 0 ? target100 / sqft : 0;
+  const askingDown = askingPrice * downPct / 100;
+  const askingLoan = askingPrice - askingDown;
+  const askingDS = monthlyPayment(askingLoan, rate, amortYears) * 12;
+  const askingCoc = askingDown > 0 ? ((noi - askingDS) / askingDown * 100) : 0;
+  const askingCocColor = askingCoc >= 100 ? "#10B981" : askingCoc >= 50 ? "#E8A838" : "#EF4444";
+  const gap = askingPrice - target100;
+  const gapPct = askingPrice > 0 ? (gap / askingPrice * 100) : 0;
+
+  return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+    <div style="font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">How to Counter</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:16px">Based on ${rate}% rate · ${amortYears}yr amort · ${downPct}% down · Pro Forma NOI ${fmt$(noi)}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Target Price (100% CoC)</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:#10B981">${fmt$(target100)}</div>
+      </div>
+      ${targetPsf ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Target Price/SF</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:#10B981">$${Math.round(targetPsf)}/SF</div>
+      </div>` : ""}
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">CoC @ Asking</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${askingCocColor}">${askingCoc.toFixed(1)}%</div>
+      </div>
+      ${askingPrice > 0 ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Gap to Target</div>
+        <div style="font-size:18px;font-weight:800;font-family:'Outfit',sans-serif;color:${gap > 0 ? "#EF4444" : "#10B981"}">${gap > 0 ? "-" : "+"}${fmt$(Math.abs(gap))}</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${Math.abs(gapPct).toFixed(1)}% ${gap > 0 ? "above" : "below"} target</div>
+      </div>` : ""}
+    </div>
+    ${gap > 0
+      ? `<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 12px;font-size:12px;color:#DC2626">
+          Asking price is <strong>${fmt$(gap)}</strong> (${gapPct.toFixed(1)}%) above the 100% CoC target. Counter at <strong>${fmt$(target100)}</strong>${targetPsf ? ` ($${Math.round(targetPsf)}/SF)` : ""} to hit your return threshold.
+        </div>`
+      : `<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 12px;font-size:12px;color:#16A34A">
+          Asking price is already at or below the 100% CoC threshold — this deal pencils at asking.
+        </div>`}
+  </div>`;
+}
+
 function renderDealDetail(d) {
   const s = stg(d.stage);
   const p = pri(d.priority);
@@ -1695,8 +1776,11 @@ function renderDealDetail(d) {
   // Scorecard
   h += renderScorecard(d, tenants);
 
-  // AI Summary
-  h += renderDealSummary(d, tenants);
+  // Analysis Summary
+  h += `<div id="deal-analysis-summary">` + renderDealSummary(d, tenants) + `</div>`;
+
+  // How to Counter
+  h += `<div id="deal-how-to-counter">` + renderHowToCounter(d) + `</div>`;
 
   // Broker section
   if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
@@ -1833,7 +1917,7 @@ function wireDealDetailEvents() {
 
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 }; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
@@ -1845,7 +1929,7 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0;
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 };
     await saveDealsToSheet(); render();
   });
 
@@ -1922,6 +2006,20 @@ function wireDealDetailEvents() {
         const pfVal = pfData.values && pfData.values[0] && pfData.values[0][0];
         state.dealDetailProFormaNoi = parseFloat((pfVal||"").toString().replace(/[$,%]/g,"")) || 0;
       } catch(e) { state.dealDetailProFormaNoi = 0; }
+      // Fetch loan data from Analysis sheet (rate J19, amort J20, down% E23)
+      try {
+        const loanResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Analysis'!J19:J20", {headers:{"Authorization":"Bearer "+state.accessToken}});
+        const loanData = await loanResp.json();
+        const downResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Analysis'!E23", {headers:{"Authorization":"Bearer "+state.accessToken}});
+        const downData = await downResp.json();
+        const strip = v => parseFloat((v||"").toString().replace(/[$,%]/g,"")) || 0;
+        const lv = loanData.values || [];
+        state.dealDetailLoanData = {
+          rate: strip(lv[0]?.[0]),
+          amortYears: strip(lv[1]?.[0]),
+          downPct: strip(downData.values?.[0]?.[0])
+        };
+      } catch(e) { state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 }; }
       // Also fetch Comps tab
       try {
         const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Comps'!A2:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
@@ -1929,9 +2027,15 @@ function wireDealDetailEvents() {
         state.dealDetailComps = (compsData.values || []).filter(row => row[0] && row[0].toString().trim());
       } catch(e) { state.dealDetailComps = []; }
       container.innerHTML = tenants.length ? renderTenantTimeline(tenants) : '<div style="color:var(--text-muted);font-size:11px">No tenants found</div>';
-      // Refresh scorecard + summary with updated data
+      // Refresh scorecard
       const scorecardEl = document.getElementById("deal-scorecard");
-      if (scorecardEl) scorecardEl.outerHTML = renderScorecard(d, tenants) + renderDealSummary(d, tenants);
+      if (scorecardEl) scorecardEl.outerHTML = renderScorecard(d, tenants);
+      // Refresh summary
+      const summaryEl = document.getElementById("deal-analysis-summary");
+      if (summaryEl) summaryEl.innerHTML = renderDealSummary(d, tenants);
+      // Refresh how to counter
+      const counterEl = document.getElementById("deal-how-to-counter");
+      if (counterEl) counterEl.innerHTML = renderHowToCounter(d);
       syncBtn.textContent = "Re-sync from UW"; syncBtn.style.pointerEvents = "auto";
     } catch(e) { container.innerHTML = '<div style="color:#EF4444;font-size:11px">Sync error: '+e.message+'</div>'; syncBtn.textContent = "View Tenants"; syncBtn.style.pointerEvents = "auto"; }
   });
