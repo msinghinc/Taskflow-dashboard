@@ -500,7 +500,7 @@ let state = {
   dealDetailComps: [],
   dealDetailSynced: false,
   dealDetailProFormaNoi: 0,
-  dealDetailLoanData: { rate: 0, amortYears: 0, downPct: 0 },
+  dealDetailLoanData: { rate: 0, amortYears: 0, downPct: 0, exitCap: 0 },
   selectedDD: null,
   ddDetailId: null,
   selectedProp: null,
@@ -1607,17 +1607,25 @@ function renderDealSummary(d, tenants) {
 function renderHowToCounter(d) {
   if (!state.dealDetailSynced) return "";
   const noi = state.dealDetailProFormaNoi;
-  const { rate, amortYears, downPct } = state.dealDetailLoanData;
+  const { rate, amortYears, downPct, exitCap } = state.dealDetailLoanData;
   const sqft = parseFloat(d.sqft) || 0;
   const askingPrice = parseFloat(d.askingPrice) || 0;
+  const HOLD_YEARS = 4;
 
-  if (!noi || !rate || !amortYears || !downPct) {
-    return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-      <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px">How to Counter</div>
-      <div style="font-size:12px;color:var(--text-muted)">Sync UW to calculate — needs pro forma NOI, rate, amortization and down payment.</div>
+  if (!noi || !rate || !amortYears || !downPct || !exitCap) {
+    const missing = [];
+    if (!noi) missing.push("Pro Forma NOI");
+    if (!rate) missing.push("Interest Rate");
+    if (!amortYears) missing.push("Amortization");
+    if (!downPct) missing.push("Down Payment %");
+    if (!exitCap) missing.push("Exit Cap Rate");
+    return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;box-shadow:var(--shadow-sm)">
+      <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:6px;letter-spacing:-0.3px">How to Counter</div>
+      <div style="font-size:13px;color:var(--text-muted)">Missing: ${missing.join(", ")}. Sync UW to calculate.</div>
     </div>`;
   }
 
+  // Monthly mortgage payment
   function monthlyPayment(loanAmt, annualRate, years) {
     const r = annualRate / 100 / 12;
     const n = years * 12;
@@ -1625,59 +1633,103 @@ function renderHowToCounter(d) {
     return loanAmt * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
   }
 
-  function solveTargetPrice(targetCoc) {
-    let lo = 0, hi = noi * 50, price = 0;
-    for (let i = 0; i < 100; i++) {
+  // Remaining loan balance after N years
+  function remainingBalance(loanAmt, annualRate, totalYears, yearsPaid) {
+    const r = annualRate / 100 / 12;
+    const n = totalYears * 12;
+    const p = yearsPaid * 12;
+    if (r === 0) return loanAmt * (1 - p/n);
+    return loanAmt * (Math.pow(1+r, n) - Math.pow(1+r, p)) / (Math.pow(1+r, n) - 1);
+  }
+
+  // Calculate ROI for a given purchase price
+  function calcROI(price) {
+    const down = price * downPct / 100;
+    const loan = price - down;
+    const monthlyPmt = monthlyPayment(loan, rate, amortYears);
+    const annualDS = monthlyPmt * 12;
+    const annualCF = noi - annualDS;
+    const totalCF = annualCF * HOLD_YEARS;
+    const exitValue = noi / (exitCap / 100);
+    const loanPayoff = remainingBalance(loan, rate, amortYears, HOLD_YEARS);
+    const netExitProceeds = exitValue - loanPayoff;
+    const totalReturn = totalCF + netExitProceeds - down;
+    const roi = down > 0 ? (totalReturn / down) * 100 : 0;
+    return { down, loan, annualCF, totalCF, exitValue, loanPayoff, netExitProceeds, totalReturn, roi, annualDS };
+  }
+
+  // Binary search for price at 100% ROI
+  function solveTargetPrice() {
+    let lo = 1000, hi = noi * 100, price = 0;
+    for (let i = 0; i < 150; i++) {
       price = (lo + hi) / 2;
-      const down = price * downPct / 100;
-      const loan = price - down;
-      const ds = monthlyPayment(loan, rate, amortYears) * 12;
-      const coc = (noi - ds) / down;
-      if (Math.abs(coc - targetCoc) < 0.0001) break;
-      if (coc < targetCoc) hi = price;
+      const { roi } = calcROI(price);
+      if (Math.abs(roi - 100) < 0.01) break;
+      if (roi < 100) hi = price;
       else lo = price;
     }
     return price;
   }
 
-  const target100 = solveTargetPrice(1.0);
+  const target100 = solveTargetPrice();
   const targetPsf = sqft > 0 ? target100 / sqft : 0;
-  const askingDown = askingPrice * downPct / 100;
-  const askingLoan = askingPrice - askingDown;
-  const askingDS = monthlyPayment(askingLoan, rate, amortYears) * 12;
-  const askingCoc = askingDown > 0 ? ((noi - askingDS) / askingDown * 100) : 0;
-  const askingCocColor = askingCoc >= 100 ? "#10B981" : askingCoc >= 50 ? "#E8A838" : "#EF4444";
+  const askingMetrics = calcROI(askingPrice);
+  const targetMetrics = calcROI(target100);
   const gap = askingPrice - target100;
   const gapPct = askingPrice > 0 ? (gap / askingPrice * 100) : 0;
+  const roiColor = askingMetrics.roi >= 100 ? "#34C759" : askingMetrics.roi >= 50 ? "#FF9F0A" : "#FF3B30";
 
-  return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
-    <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">How to Counter</div>
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:16px">Based on ${rate}% rate · ${amortYears}yr amort · ${downPct}% down · Pro Forma NOI ${fmt$(noi)}</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px">
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
-        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Target Price (100% CoC)</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:#10B981">${fmt$(target100)}</div>
+  // Exit value is same regardless of price (NOI / exitCap)
+  const exitValue = noi / (exitCap / 100);
+
+  return `<div style="background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;box-shadow:var(--shadow-sm)">
+    <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:4px;letter-spacing:-0.3px">How to Counter</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px">${rate}% rate · ${amortYears}yr amort · ${downPct}% down · ${exitCap}% exit cap · ${HOLD_YEARS}yr hold · Pro Forma NOI ${fmt$(noi)} · Exit Value ${fmt$(exitValue)}</div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:20px">
+      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Target Price (100% ROI)</div>
+        <div style="font-size:20px;font-weight:700;color:#34C759;letter-spacing:-0.8px">${fmt$(target100)}</div>
+        ${targetPsf ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">$${Math.round(targetPsf)}/SF</div>` : ""}
       </div>
-      ${targetPsf ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
-        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Target Price/SF</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:#10B981">$${Math.round(targetPsf)}/SF</div>
-      </div>` : ""}
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
-        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">CoC @ Asking</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${askingCocColor}">${askingCoc.toFixed(1)}%</div>
+      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">ROI @ Asking</div>
+        <div style="font-size:20px;font-weight:700;color:${roiColor};letter-spacing:-0.8px">${askingMetrics.roi.toFixed(1)}%</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${HOLD_YEARS}yr hold</div>
       </div>
-      ${askingPrice > 0 ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px">
-        <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">Gap to Target</div>
-        <div style="font-size:18px;font-weight:800;font-family:'Inter',sans-serif;color:${gap > 0 ? "#EF4444" : "#10B981"}">${gap > 0 ? "-" : "+"}${fmt$(Math.abs(gap))}</div>
-        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${Math.abs(gapPct).toFixed(1)}% ${gap > 0 ? "above" : "below"} target</div>
+      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Exit Value</div>
+        <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.8px">${fmt$(exitValue)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">@ ${exitCap}% cap</div>
+      </div>
+      <div style="background:var(--bg);border-radius:var(--radius);padding:14px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Annual Cash Flow</div>
+        <div style="font-size:20px;font-weight:700;color:${askingMetrics.annualCF>=0?'var(--text)':'#FF3B30'};letter-spacing:-0.8px">${fmt$(askingMetrics.annualCF)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">after debt service</div>
+      </div>
+      ${askingPrice > 0 ? `<div style="background:var(--bg);border-radius:var(--radius);padding:14px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:6px">Gap to Target</div>
+        <div style="font-size:20px;font-weight:700;color:${gap>0?'#FF3B30':'#34C759'};letter-spacing:-0.8px">${gap>0?"-":"+"}${fmt$(Math.abs(gap))}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${Math.abs(gapPct).toFixed(1)}% ${gap>0?"above":"below"} target</div>
       </div>` : ""}
     </div>
+
+    <div style="background:var(--bg);border-radius:var(--radius);padding:14px;font-size:12px;color:var(--text-secondary);line-height:1.7">
+      <div style="font-weight:600;color:var(--text);margin-bottom:6px">Return Breakdown @ Asking Price</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+        <span style="color:var(--text-muted)">Down Payment</span><span style="font-weight:500">${fmt$(askingMetrics.down)}</span>
+        <span style="color:var(--text-muted)">Total Cash Flow (${HOLD_YEARS}yr)</span><span style="font-weight:500">${fmt$(askingMetrics.totalCF)}</span>
+        <span style="color:var(--text-muted)">Net Exit Proceeds</span><span style="font-weight:500">${fmt$(askingMetrics.netExitProceeds)}</span>
+        <span style="color:var(--text-muted)">Total Return</span><span style="font-weight:600;color:${askingMetrics.totalReturn>=0?'#34C759':'#FF3B30'}">${fmt$(askingMetrics.totalReturn)}</span>
+      </div>
+    </div>
+
     ${gap > 0
-      ? `<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 12px;font-size:12px;color:#DC2626">
-          Asking price is <strong>${fmt$(gap)}</strong> (${gapPct.toFixed(1)}%) above the 100% CoC target. Counter at <strong>${fmt$(target100)}</strong>${targetPsf ? ` ($${Math.round(targetPsf)}/SF)` : ""} to hit your return threshold.
+      ? `<div style="margin-top:12px;background:#FFF2F2;border-radius:var(--radius);padding:12px 14px;font-size:12px;color:#FF3B30">
+          Counter at <strong>${fmt$(target100)}</strong>${targetPsf?` ($${Math.round(targetPsf)}/SF)`:""} — ${Math.abs(gapPct).toFixed(1)}% below asking — to hit 100% ROI over ${HOLD_YEARS} years.
         </div>`
-      : `<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:10px 12px;font-size:12px;color:#16A34A">
-          Asking price is already at or below the 100% CoC threshold — this deal pencils at asking.
+      : `<div style="margin-top:12px;background:#F0FFF4;border-radius:var(--radius);padding:12px 14px;font-size:12px;color:#34C759">
+          Asking price already delivers 100%+ ROI over ${HOLD_YEARS} years at a ${exitCap}% exit cap.
         </div>`}
   </div>`;
 }
@@ -1871,7 +1923,7 @@ function wireDealDetailEvents() {
 
   // Back
   const back = document.querySelector("[data-action='deal-back']");
-  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 }; render(); });
+  if (back) back.addEventListener("click", () => { state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; render(); });
 
   // Stage selector
   document.querySelectorAll("[data-action='deal-set-stage']").forEach(btn => {
@@ -1883,7 +1935,7 @@ function wireDealDetailEvents() {
   if (removeBtn) removeBtn.addEventListener("click", async () => {
     if (!confirm("Remove this deal? This cannot be undone.")) return;
     state.deals = state.deals.filter(dl => dl.id !== d.id);
-    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 };
+    state.selectedDealDetail = null; state.dealDetailTenants = []; state.dealDetailComps = []; state.dealDetailSynced = false; state.dealDetailProFormaNoi = 0; state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 };
     await saveDealsToSheet(); render();
   });
 
@@ -1971,9 +2023,17 @@ function wireDealDetailEvents() {
         state.dealDetailLoanData = {
           rate: strip(lv[0]?.[0]),
           amortYears: strip(lv[1]?.[0]),
-          downPct: strip(downData.values?.[0]?.[0])
+          downPct: strip(downData.values?.[0]?.[0]),
+          exitCap: 0
         };
-      } catch(e) { state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0 }; }
+        // Fetch exit cap rate from Rent Roll!C10
+        try {
+          const exitCapResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Rent Roll'!C10", {headers:{"Authorization":"Bearer "+state.accessToken}});
+          const exitCapData = await exitCapResp.json();
+          const exitCapVal = exitCapData.values?.[0]?.[0];
+          state.dealDetailLoanData.exitCap = parseFloat((exitCapVal||"").toString().replace(/[%,%]/g,"")) || 0;
+        } catch(e) { state.dealDetailLoanData.exitCap = 0; }
+      } catch(e) { state.dealDetailLoanData = { rate:0, amortYears:0, downPct:0, exitCap:0 }; }
       // Also fetch Comps from Call to Broker tab (B16:J100 — skip col A which is empty)
       try {
         const compsResp = await fetch(SHEETS_BASE+"/"+uwSheetId+"/values/'Call to Broker'!B16:J100", {headers:{"Authorization":"Bearer "+state.accessToken}});
