@@ -1664,6 +1664,20 @@ function vacancyMonths(sqft) {
 
 // Build month-level TILC cashflow model
 // Returns array of 48 monthly net cashflows (operating only, no debt service, no acquisition)
+// Parse lease date string → {year, month} or null. Handles YYYY-MM-DD and M/D/YYYY.
+function parseLeaseDate(str) {
+  if (!str) return null;
+  const s = str.toString().trim();
+  if (s.toUpperCase() === "MTM") return null;
+  // YYYY-MM-DD
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return { year: parseInt(iso[1]), month: parseInt(iso[2]) - 1 };
+  // M/D/YYYY or MM/DD/YYYY
+  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (slash) return { year: parseInt(slash[3]), month: parseInt(slash[1]) - 1 };
+  return null;
+}
+
 function buildTILCModel(tenants, marketRent, acqDate, proFormaExpenses, totalSqft) {
   const MONTHS = 48;
   if (!acqDate) acqDate = new Date();
@@ -1713,10 +1727,13 @@ function buildTILCModel(tenants, marketRent, acqDate, proFormaExpenses, totalSqf
       const pctOfMarket = adjMR > 0 ? rentPerSf / adjMR : 1;
       leaseEndMonth = pctOfMarket < 0.5 ? 0 : 12;
     } else if (t.leaseEnd) {
-      const leEnd = new Date(t.leaseEnd + "T00:00:00");
-      const mDiff = (leEnd.getFullYear() - acqDate.getFullYear()) * 12
-                  + (leEnd.getMonth() - acqDate.getMonth());
-      leaseEndMonth = Math.max(0, Math.min(MONTHS, mDiff));
+      // Parse month+year only — handle YYYY-MM-DD and M/D/YYYY, clamp invalid days
+      const leEnd = parseLeaseDate(t.leaseEnd);
+      if (leEnd) {
+        const mDiff = (leEnd.year - acqDate.getFullYear()) * 12
+                    + (leEnd.month - acqDate.getMonth());
+        leaseEndMonth = Math.max(0, Math.min(MONTHS, mDiff));
+      }
     }
 
     // Phase 1: income during active existing lease (keep original gross rent as-is)
@@ -2076,13 +2093,15 @@ function renderFinancialAnalysis(d) {
     const expByYear = {};
     tenants.forEach(t => {
       if (t.isVacant) return;
+      const leaseEndStr = (t.leaseEnd || "").toString().trim();
       let yr;
-      if (t.isMTM || (t.leaseEnd||"").toUpperCase() === "MTM") {
+      if (t.isMTM || leaseEndStr.toUpperCase() === "MTM") {
         yr = "MTM";
-      } else if (t.leaseEnd) {
-        const leEnd = new Date(t.leaseEnd + "T00:00:00");
-        yr = leEnd.getFullYear().toString();
-      } else return;
+      } else {
+        const parsed = parseLeaseDate(leaseEndStr);
+        if (!parsed) return;
+        yr = parsed.year.toString();
+      }
       if (!expByYear[yr]) expByYear[yr] = [];
       expByYear[yr].push(t);
     });
@@ -2137,8 +2156,11 @@ function renderFinancialAnalysis(d) {
         const variance = adjMR > 0 && t.rentPerSf ? t.rentPerSf - adjMR : null;
         const varPct = adjMR > 0 && t.rentPerSf ? (t.rentPerSf/adjMR - 1)*100 : null;
         const glaPct = totalGLA > 0 ? (t.sqft||0)/totalGLA*100 : 0;
+        const parsed = parseLeaseDate(t.leaseEnd);
+        const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const expStr = t.isMTM ? "MTM" : parsed ? `${monthNames[parsed.month]} ${parsed.year}` : t.leaseEnd;
         content += `<tr style="border-bottom:1px solid var(--border-light)">
-          <td style="padding:7px 12px 7px 24px;color:var(--text)">${esc(t.name)}${t.suite?` <span style="color:var(--text-muted);font-size:10px">· Suite ${esc(t.suite)}</span>`:""}</td>
+          <td style="padding:7px 12px 7px 24px;color:var(--text)">${esc(t.name)}${t.suite?` <span style="color:var(--text-muted);font-size:10px">· Suite ${esc(t.suite)}</span>`:""} <span style="color:var(--text-muted);font-size:10px">${expStr}</span></td>
           <td style="text-align:right;padding:7px 12px">${fmtNum(t.sqft)}</td>
           <td style="text-align:right;padding:7px 12px;color:var(--text-muted)">${glaPct.toFixed(1)}%</td>
           <td style="text-align:right;padding:7px 12px">${t.rentPerSf?"$"+t.rentPerSf.toFixed(2):"—"}</td>
