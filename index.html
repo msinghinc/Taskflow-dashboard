@@ -877,6 +877,13 @@ async function loadDeals() {
       obj.ahi5mi = parseFloat(obj.ahi5mi) || 0;
       obj.popGrowthRate = parseFloat(obj.popGrowthRate) || 0;
       obj.daytimePopulation = parseFloat(obj.daytimePopulation) || 0;
+      obj.ownerName = obj.ownerName || "";
+      obj.ownerPhone = obj.ownerPhone || "";
+      obj.ownerPhone2 = obj.ownerPhone2 || "";
+      obj.ownerEmail = obj.ownerEmail || "";
+      obj.ownerAddress = obj.ownerAddress || "";
+      obj.ownerCompany = obj.ownerCompany || "";
+      obj.listingStatus = obj.listingStatus || "active";
       return obj;
     });
   } else { state.deals = []; }
@@ -986,6 +993,29 @@ function render() {
     h += `<div class="main">` + renderKPIsTab() + `</div>`;
   }
   app.innerHTML = h;
+
+  // CSV Import modal (always in DOM)
+  if (!document.getElementById("csv-import-modal")) {
+    const modal = document.createElement("div");
+    modal.id = "csv-import-modal";
+    modal.style.cssText = "display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center";
+    modal.innerHTML = `
+      <div style="background:var(--bg-card);border-radius:16px;padding:28px;width:480px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)" onclick="event.stopPropagation()">
+        <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:6px">Import Properties from CSV</div>
+        <div id="csv-modal-body">
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px">CoStar/skiptrace export format supported. New deals will be set to Prospecting / Off Market.</div>
+          <div id="csv-preview" style="font-size:13px;color:var(--text-secondary);background:var(--bg);border-radius:8px;padding:12px;margin-bottom:16px;min-height:48px">Select a CSV file to preview.</div>
+          <div style="display:flex;gap:8px">
+            <button id="csv-confirm-btn" style="flex:1;padding:10px;background:#0071E3;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;display:none">Import</button>
+            <button id="csv-cancel-btn" style="padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;font-family:'Inter',sans-serif">Cancel</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener("click", e => { if(e.target===modal) modal.style.display="none"; });
+    document.getElementById("csv-cancel-btn").addEventListener("click", () => { modal.style.display="none"; });
+  }
+
   wireHeaderEvents();
   wireEvents();
   if (state.section === "acquisitions" && state.selectedDealDetail) wireDealDetailEvents();
@@ -1028,6 +1058,8 @@ function renderHeader() {
     <div class="header-right">
       <input type="text" class="search-input" id="search-input" placeholder="Search..." value="${esc(state.search)}">
       <button class="login-btn" style="padding:8px 16px;font-size:12px" id="refresh-btn">↻ Refresh</button>
+      <button class="login-btn" style="padding:8px 16px;font-size:12px;background:#0071E3;color:#fff;border:none" id="import-csv-btn">⬆ Import CSV</button>
+      <input type="file" id="csv-file-input" accept=".csv" style="display:none">
     </div>
   </div></div>`;
 }
@@ -1045,6 +1077,7 @@ function wireHeaderEvents() {
   }
   const refreshBtn = document.getElementById("refresh-btn");
   if (refreshBtn) refreshBtn.addEventListener("click", async () => { await loadDeals(); render(); });
+  wireCSVImport();
 }
 
 function renderStats() {
@@ -2875,6 +2908,26 @@ function renderDealDetail(d) {
       </div>`;
     }
 
+    // Owner section
+    if(d.ownerName||d.ownerPhone||d.ownerEmail||d.ownerCompany){
+      h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text)">Owner</div>
+          ${d.listingStatus==="off_market"?`<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:#FEF3C7;color:#92400E;font-weight:600">Off Market</span>`:""}
+        </div>
+        <div>
+          ${d.ownerName?`<div style="font-size:14px;font-weight:700;color:var(--text)">${esc(d.ownerName)}</div>`:""}
+          ${d.ownerCompany?`<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${esc(d.ownerCompany)}</div>`:""}
+          <div style="display:flex;gap:16px;margin-top:6px;font-size:12px;color:var(--text-secondary);flex-wrap:wrap">
+            ${d.ownerPhone?`<span>📞 ${esc(d.ownerPhone)}</span>`:""}
+            ${d.ownerPhone2?`<span>📞 ${esc(d.ownerPhone2)} <span style="font-size:10px;color:var(--text-muted)">(alt)</span></span>`:""}
+            ${d.ownerEmail?`<span>✉ ${esc(d.ownerEmail)}</span>`:""}
+          </div>
+          ${d.ownerAddress?`<div style="font-size:11px;color:var(--text-muted);margin-top:6px">📍 ${esc(d.ownerAddress)}</div>`:""}
+        </div>
+      </div>`;
+    }
+
     // Call Log
     h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -3338,6 +3391,168 @@ async function saveRentRollToUW(uwUrl) {
   }
 }
 
+// ---- CSV IMPORT ----
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  const headers = parseCSVRow(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = parseCSVRow(lines[i]);
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = (vals[idx] || "").trim(); });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function parseCSVRow(line) {
+  const result = [];
+  let cur = "", inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuote = !inQuote; }
+    else if (ch === ',' && !inQuote) { result.push(cur); cur = ""; }
+    else { cur += ch; }
+  }
+  result.push(cur);
+  return result;
+}
+
+function mapCSVRowToDeal(row) {
+  const addr = [row["Property Address"], row["City"], row["State"], row["Zip"]]
+    .filter(Boolean).join(", ");
+  const name = row["Property Name"] || row["Property Address"] || addr;
+
+  // Parse asking price
+  const priceStr = (row["For Sale Price"] || "").replace(/[$,\s]/g, "");
+  const askingPrice = parseFloat(priceStr) || 0;
+
+  // Parse sqft
+  const sqft = parseFloat(row["RBA"]) || 0;
+
+  // Owner from skiptrace
+  const ownerFirst = row["Skiptrace:name.first"] || "";
+  const ownerLast = row["Skiptrace:name.last"] || "";
+  const ownerName = [ownerFirst, ownerLast].filter(Boolean).join(" ") || row["True Owner Contact"] || "";
+  const ownerPhone = row["Skiptrace:phoneNumbers.0.number"] || "";
+  const ownerPhone2 = row["Skiptrace:phoneNumbers.1.number"] || "";
+  const ownerEmail = row["Skiptrace:emails.0.email"] || "";
+  const ownerAddr = [
+    row["Skiptrace:mailingAddress.street"],
+    row["Skiptrace:mailingAddress.city"],
+    row["Skiptrace:mailingAddress.state"],
+    row["Skiptrace:mailingAddress.zip"]
+  ].filter(Boolean).join(", ");
+  const ownerCompany = row["True Owner Contact"] && row["True Owner Contact"] !== ownerName ? row["True Owner Contact"] : "";
+
+  // Notes — compile useful info
+  const notesParts = [];
+  if (row["Year Built"]) notesParts.push(`Built: ${row["Year Built"]}`);
+  if (row["Year Renovated"]) notesParts.push(`Renovated: ${row["Year Renovated"]}`);
+  if (row["Percent Leased"]) notesParts.push(`Leased: ${row["Percent Leased"]}%`);
+  if (row["Last Sale Price"]) notesParts.push(`Last Sale: $${row["Last Sale Price"]}`);
+  if (row["Last Sale Date"]) notesParts.push(`Last Sale Date: ${row["Last Sale Date"]}`);
+  if (row["Parking Ratio"]) notesParts.push(`Parking: ${row["Parking Ratio"]}/1000SF`);
+
+  return {
+    id: Math.random().toString(36).slice(2,10),
+    name, address: addr,
+    propertyType: "multi",
+    stage: "prospecting",
+    priority: "medium",
+    askingPrice, sqft,
+    noi: 0, capRate: 0, acreage: "", numTenants: "", walt: "",
+    broker: row["Leasing Company Name"] || "",
+    brokerContact: row["Leasing Company Contact"] || "",
+    brokerPhone: row["Leasing Company Phone"] || "",
+    brokerEmail: "",
+    notes: notesParts.join(" · "),
+    listingLink: "", uwLink: "", costarLink: "", loiLink: "", omLink: "", folderLink: "",
+    vehiclesPerDay: 0, pop3mi: 0, ahi3mi: 0, score: "",
+    uwRentPsf: "", uwVacancy: "8", uwExpenseRatio: "35", uwTargetCap: "7.5",
+    createdAt: Date.now(), lastActivity: Date.now(),
+    hotList: false, watchList: false, brokerReached: false,
+    callLog: [], stageHistory: [], offerHistory: [],
+    coolDownUntil: null, coolDownMonths: null,
+    listingDate: "", loiSentDate: "",
+    listingStatus: "off_market",
+    uwGeneratedDate: 0, loiGeneratedDate: 0, stageChangedDate: 0,
+    sfLoiLink: "",
+    ownerName, ownerPhone, ownerPhone2, ownerEmail,
+    ownerAddress: ownerAddr, ownerCompany,
+    propertyCondition: "", roofCondition: "", parkingCondition: "", hvacCondition: "",
+    roofAge: 0, hvacAge: 0, parkingAge: 0, deferredMaint: 0, envConcerns: "",
+    locationType: "", shadowAnchor: false, shadowAnchorName: "", coTenancy: "",
+    marketRent: 0, pop1mi: 0, ahi1mi: 0, pop5mi: 0, ahi5mi: 0,
+    popGrowthRate: 0, daytimePopulation: 0
+  };
+}
+
+function wireCSVImport() {
+  const importBtn = document.getElementById("import-csv-btn");
+  const fileInput = document.getElementById("csv-file-input");
+  const modal = document.getElementById("csv-import-modal");
+  if (!importBtn || !fileInput || !modal) return;
+
+  let pendingDeals = [];
+
+  importBtn.addEventListener("click", () => {
+    fileInput.value = "";
+    pendingDeals = [];
+    document.getElementById("csv-preview").textContent = "Select a CSV file to preview.";
+    document.getElementById("csv-confirm-btn").style.display = "none";
+    modal.style.display = "flex";
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const rows = parseCSV(e.target.result);
+      const existingAddresses = new Set(state.deals.map(d => (d.address||"").toLowerCase().trim()));
+      pendingDeals = [];
+      let skipped = 0;
+      rows.forEach(row => {
+        const deal = mapCSVRowToDeal(row);
+        if (!deal.address && !deal.name) return;
+        const addrKey = deal.address.toLowerCase().trim();
+        if (existingAddresses.has(addrKey)) { skipped++; return; }
+        pendingDeals.push(deal);
+      });
+      const preview = document.getElementById("csv-preview");
+      preview.innerHTML = `
+        <div style="font-weight:600;color:var(--text);margin-bottom:4px">Ready to import ${pendingDeals.length} new deal${pendingDeals.length!==1?"s":""}.</div>
+        ${skipped>0?`<div style="color:#FF9F0A;font-size:12px">⚠ ${skipped} duplicate${skipped!==1?"s":""} skipped (address already exists).</div>`:""}
+        ${pendingDeals.length===0?`<div style="color:#FF3B30;font-size:12px">No new deals to import.</div>`:""}
+      `;
+      document.getElementById("csv-confirm-btn").style.display = pendingDeals.length > 0 ? "block" : "none";
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById("csv-confirm-btn").addEventListener("click", async () => {
+    if (!pendingDeals.length) return;
+    const btn = document.getElementById("csv-confirm-btn");
+    btn.textContent = "Importing...";
+    btn.style.pointerEvents = "none";
+    state.deals.push(...pendingDeals);
+    await saveDealsToSheet();
+    modal.style.display = "none";
+    const count = pendingDeals.length;
+    pendingDeals = [];
+    render();
+    // Show brief success message
+    const toast = document.createElement("div");
+    toast.style.cssText = "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#34C759;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;font-weight:600;z-index:99999;font-family:'Inter',sans-serif";
+    toast.textContent = `✓ ${count} deal${count!==1?"s":""} imported successfully`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+  });
+}
+
 function wireEvents() {
   // Deal card clicks (kanban)
   document.querySelectorAll(".k-card[data-deal-id]").forEach(card => {
@@ -3466,7 +3681,7 @@ async function saveDDToSheet() {
 }
 async function saveDealsToSheet() {
   if (!state.spreadsheetId) return;
-  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","watchList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink","propertyCondition","roofCondition","parkingCondition","hvacCondition","roofAge","hvacAge","parkingAge","deferredMaint","envConcerns","locationType","shadowAnchor","shadowAnchorName","coTenancy","marketRent","pop1mi","ahi1mi","pop5mi","ahi5mi","popGrowthRate","daytimePopulation","stageHistory","offerHistory","coolDownUntil","coolDownMonths"];
+  const headers = ["id","name","address","propertyType","stage","priority","askingPrice","noi","capRate","sqft","acreage","numTenants","walt","broker","brokerContact","brokerPhone","brokerEmail","notes","listingLink","uwLink","costarLink","loiLink","omLink","folderLink","vehiclesPerDay","pop3mi","ahi3mi","score","uwRentPsf","uwVacancy","uwExpenseRatio","uwTargetCap","createdAt","lastActivity","hotList","watchList","listingDate","loiSentDate","brokerReached","callLog","uwGeneratedDate","loiGeneratedDate","stageChangedDate","sfLoiLink","propertyCondition","roofCondition","parkingCondition","hvacCondition","roofAge","hvacAge","parkingAge","deferredMaint","envConcerns","locationType","shadowAnchor","shadowAnchorName","coTenancy","marketRent","pop1mi","ahi1mi","pop5mi","ahi5mi","popGrowthRate","daytimePopulation","stageHistory","offerHistory","coolDownUntil","coolDownMonths","ownerName","ownerPhone","ownerPhone2","ownerEmail","ownerAddress","ownerCompany","listingStatus"];
   const values = [headers, ...state.deals.map(d => headers.map(h => {
     const val = d[h]; if (val === undefined || val === null) return ""; if (typeof val === "object") return JSON.stringify(val); return String(val);
   }))];
