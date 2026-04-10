@@ -916,7 +916,7 @@ function filteredDeals() {
   let list = state.deals;
   if (state.stageFilter === "watchlist") list = list.filter(d => d.watchList);
   else if (state.stageFilter === "cool_down") list = list.filter(d => d.stage === "cool_down");
-  else if (state.stageFilter === "loi_ready") list = list.filter(d => d.loiGeneratedDate > 0 && !d.loiSentDate);
+  else if (state.stageFilter === "loi_ready") list = list.filter(d => d.loiLink && !d.loiSentDate);
   else if (state.stageFilter !== "all") list = list.filter(d => d.stage === state.stageFilter && !isCoolingDown(d));
   else list = list.filter(d => d.stage !== "loi_accepted" && !isCoolingDown(d));
   if (state.search) {
@@ -3056,6 +3056,10 @@ function wireDealDetailEvents() {
       if (!d.stageHistory) d.stageHistory = [];
       d.stageHistory.push({ fromStage: oldStage, toStage: d.stage, date: Date.now() });
       if (d.stage !== "cool_down") { d.coolDownUntil = null; d.coolDownMonths = null; }
+      // Set loiSentDate when moving to LOI Submitted
+      if (d.stage === "loi" && !d.loiSentDate) {
+        d.loiSentDate = new Date().toISOString().split("T")[0];
+      }
       await saveDealsToSheet(); render();
     });
   });
