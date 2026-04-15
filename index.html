@@ -568,6 +568,7 @@ function calcDOMDash(listingDate) {
 
 function getDealFlagsDash(d) {
   if (d.stage === "dead" || d.stage === "loi_accepted") return [];
+  if (d.stage === "cool_down" && d.coolDownUntil && Date.now() < d.coolDownUntil) return [];
   const now = Date.now();
   const DAY = 864e5;
   const flags = [];
@@ -641,8 +642,10 @@ function renderAcqKPIs() {
     });
   });
 
-  // Stale deals (no activity 7+ days, not dead)
+  // Stale deals (no activity 7+ days, not dead/loi_accepted/cool_down)
   const staleDeals = active.filter(d => {
+    if (d.stage === "dead" || d.stage === "loi_accepted") return false;
+    if (isCoolingDown(d)) return false;
     const la = d.lastActivity || d.createdAt || 0;
     return (now - la) > 7 * DAY;
   });
@@ -916,7 +919,7 @@ function filteredDeals() {
   let list = state.deals;
   if (state.stageFilter === "watchlist") list = list.filter(d => d.watchList);
   else if (state.stageFilter === "cool_down") list = list.filter(d => d.stage === "cool_down");
-  else if (state.stageFilter === "loi_ready") list = list.filter(d => d.loiLink && !d.loiSentDate);
+  else if (state.stageFilter === "loi_ready") list = list.filter(d => d.loiGeneratedDate > 0 && !d.loiSentDate);
   else if (state.stageFilter !== "all") list = list.filter(d => d.stage === state.stageFilter && !isCoolingDown(d));
   else list = list.filter(d => d.stage !== "loi_accepted" && !isCoolingDown(d));
   if (state.search) {
@@ -1032,8 +1035,13 @@ function renderHeader() {
       ${subToggle}
     </div>
     <div class="header-right">
-      <input type="text" class="search-input" id="search-input" placeholder="Search..." value="${esc(state.search)}">
+      <div style="position:relative">
+        <input type="text" class="search-input" id="search-input" placeholder="Search deals..." value="${esc(state.search)}" autocomplete="off">
+        <div id="search-dropdown" style="display:none;position:absolute;top:calc(100% + 4px);right:0;width:320px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.12);z-index:9999;max-height:320px;overflow-y:auto"></div>
+      </div>
       <button class="login-btn" style="padding:8px 16px;font-size:12px" id="refresh-btn">↻ Refresh</button>
+      <button class="login-btn" style="padding:8px 16px;font-size:12px;background:#0071E3;color:#fff;border:none" id="import-csv-btn">⬆ Import CSV</button>
+      <input type="file" id="csv-file-input" accept=".csv" style="display:none">
     </div>
   </div></div>`;
 }
@@ -1047,21 +1055,79 @@ function wireHeaderEvents() {
   });
   let searchTimer = null;
   const searchEl = document.getElementById("search-input");
-  if (searchEl) {
+  const dropdown = document.getElementById("search-dropdown");
+
+  if (searchEl && dropdown) {
+    const STAGE_LABELS = { prospecting:"Prospecting", underwriting:"Underwriting", loi:"LOI Submitted", loi_accepted:"LOI Accepted", cool_down:"Cool Down", dead:"Dead" };
+    const STAGE_COLORS = { prospecting:"#6366F1", underwriting:"#E8A838", loi:"#3B82F6", loi_accepted:"#0EA5E9", cool_down:"#10B981", dead:"#94A3B8" };
+
     searchEl.addEventListener("input", (e) => {
-      state.search = e.target.value;
-      const val = e.target.value;
+      const val = e.target.value.trim();
       const pos = e.target.selectionStart;
+      state.search = e.target.value;
+
       clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => {
-        render();
-        const newEl = document.getElementById("search-input");
-        if (newEl) { newEl.focus(); newEl.setSelectionRange(pos, pos); }
-      }, 150);
+
+      if (val.length < 2) { dropdown.style.display = "none"; }
+      else {
+        const q = val.toLowerCase();
+        const matches = state.deals.filter(d =>
+          (d.name||"").toLowerCase().includes(q) ||
+          (d.address||"").toLowerCase().includes(q) ||
+          (d.broker||"").toLowerCase().includes(q)
+        ).slice(0, 8);
+
+        if (matches.length) {
+          dropdown.innerHTML = matches.map(d => {
+            const color = STAGE_COLORS[d.stage] || "#94A3B8";
+            const label = STAGE_LABELS[d.stage] || d.stage;
+            return `<div data-deal-jump="${d.id}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:var(--text)">${esc(d.name)}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(d.address||"")}</div>
+              </div>
+              <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:${color}15;color:${color};font-weight:600;flex-shrink:0;margin-left:8px">${label}</span>
+            </div>`;
+          }).join("");
+          dropdown.style.display = "block";
+
+          // Wire jump clicks
+          dropdown.querySelectorAll("[data-deal-jump]").forEach(el => {
+            el.addEventListener("mousedown", (ev) => {
+              ev.preventDefault();
+              const id = el.dataset.dealJump;
+              dropdown.style.display = "none";
+              searchEl.value = "";
+              state.search = "";
+              state.section = "acquisitions";
+              state.selectedDealDetail = id;
+              render();
+            });
+          });
+        } else {
+          dropdown.innerHTML = `<div style="padding:12px 14px;font-size:12px;color:var(--text-muted)">No deals found</div>`;
+          dropdown.style.display = "block";
+        }
+      }
+
+      // Still debounce section-level search filter
+      if (state.section === "acquisitions" && !state.selectedDealDetail) {
+        searchTimer = setTimeout(() => {
+          render();
+          const newEl = document.getElementById("search-input");
+          if (newEl) { newEl.focus(); newEl.setSelectionRange(pos, pos); }
+        }, 150);
+      }
     });
+
+    // Hide dropdown on blur
+    searchEl.addEventListener("blur", () => { setTimeout(() => { dropdown.style.display = "none"; }, 150); });
+    searchEl.addEventListener("focus", (e) => { if (e.target.value.trim().length >= 2) e.target.dispatchEvent(new Event("input")); });
   }
+
   const refreshBtn = document.getElementById("refresh-btn");
   if (refreshBtn) refreshBtn.addEventListener("click", async () => { await loadDeals(); render(); });
+  wireCSVImport();
 }
 
 function renderStats() {
@@ -3056,10 +3122,6 @@ function wireDealDetailEvents() {
       if (!d.stageHistory) d.stageHistory = [];
       d.stageHistory.push({ fromStage: oldStage, toStage: d.stage, date: Date.now() });
       if (d.stage !== "cool_down") { d.coolDownUntil = null; d.coolDownMonths = null; }
-      // Set loiSentDate when moving to LOI Submitted
-      if (d.stage === "loi" && !d.loiSentDate) {
-        d.loiSentDate = new Date().toISOString().split("T")[0];
-      }
       await saveDealsToSheet(); render();
     });
   });
@@ -3993,24 +4055,32 @@ function renderKPIsTab() {
   h+=`</div></div></div>`;
 
   // Deal Health + Stale Deals
-  const flaggedDeals=active.filter(d=>getDealFlagsDash(d).length>0);
-  const staleDeals=active.filter(d=>{const la=d.lastActivity||d.createdAt||0;return(Date.now()-la)>7*DAY;});
+  const isCoolingDownKpi = d => d.stage === "cool_down" && d.coolDownUntil && Date.now() < d.coolDownUntil;
+  const flaggedDeals=active.filter(d=>!isCoolingDownKpi(d)&&d.stage!=="dead"&&getDealFlagsDash(d).length>0);
+  const staleDeals=active.filter(d=>{
+    if(d.stage==="dead"||d.stage==="loi_accepted"||isCoolingDownKpi(d))return false;
+    const la=d.lastActivity||d.createdAt||0;return(Date.now()-la)>7*DAY;
+  });
 
   h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">`;
   // Flags
   h+=`<div style="background:var(--bg-card);border:1px solid ${flaggedDeals.length?'#FECACA':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${flaggedDeals.length?'#DC2626':'var(--text)'}">Deal Health Flags</div><span style="font-size:22px;font-weight:800;font-family:'Inter',sans-serif;color:${flaggedDeals.length?'#DC2626':'#10B981'}">${flaggedDeals.length}</span></div>`;
-  if(flaggedDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;flaggedDeals.forEach(d=>{const flags=getDealFlagsDash(d);const link=d.listingLink||d.costarLink||d.uwLink||"";h+=`<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;text-decoration:none;${link?'cursor:pointer':''}"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:var(--text-muted)"> — ${flags.map(f=>f.msg).join(", ")}</span></a>`;});h+=`</div>`;}
+  if(flaggedDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;flaggedDeals.forEach(d=>{const flags=getDealFlagsDash(d);h+=`<div data-open-deal="${esc(d.id)}" style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;cursor:pointer"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:var(--text-muted)"> — ${flags.map(f=>f.msg).join(", ")}</span></div>`;});h+=`</div>`;}
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">All deals healthy ✓</div>`;
   h+=`</div>`;
 
   // Stale
   h+=`<div style="background:var(--bg-card);border:1px solid ${staleDeals.length?'#FDE68A':'var(--border)'};border-radius:12px;padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:14px;font-weight:700;color:${staleDeals.length?'#D97706':'var(--text)'}">Stale Deals (7+ days idle)</div><span style="font-size:22px;font-weight:800;font-family:'Inter',sans-serif;color:${staleDeals.length?'#D97706':'#10B981'}">${staleDeals.length}</span></div>`;
-  if(staleDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;staleDeals.forEach(d=>{const la=d.lastActivity||d.createdAt||0;const days=Math.floor((Date.now()-la)/DAY);const link=d.listingLink||d.costarLink||d.uwLink||"";h+=`<a ${link?`href="${esc(link)}" target="_blank"`:'href="#"'} style="display:block;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;text-decoration:none;display:flex;justify-content:space-between;${link?'cursor:pointer':''}"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:#D97706;font-weight:600">${days}d idle</span></a>`;});h+=`</div>`;}
+  if(staleDeals.length){h+=`<div style="max-height:200px;overflow-y:auto">`;staleDeals.forEach(d=>{const la=d.lastActivity||d.createdAt||0;const days=Math.floor((Date.now()-la)/DAY);h+=`<div data-open-deal="${esc(d.id)}" style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:11px;cursor:pointer"><span style="font-weight:600;color:var(--text)">${esc(d.name)}</span><span style="color:#D97706;font-weight:600">${days}d idle</span></div>`;});h+=`</div>`;}
   else h+=`<div style="color:#10B981;font-size:13px;font-weight:600;padding:20px 0;text-align:center">No stale deals ✓</div>`;
   h+=`</div></div>`;
 
   // KPI Weekly History
-  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px">Weekly KPI History</div>`;
+  h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:14px;font-weight:700;color:var(--text)">Weekly KPI History</div>
+      <button id="kpi-snap-btn" style="padding:6px 14px;background:var(--bg-dark);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">Save Snapshot Now</button>
+    </div>`;
   h+=`<div id="kpi-history-container"><div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">Loading history...</div></div></div>`;
 
   h+=`</div>`;
@@ -4018,6 +4088,34 @@ function renderKPIsTab() {
 }
 
 function wireKPIEvents() {
+  // Wire deal clicks in health flags + stale deals → open expanded view
+  document.querySelectorAll("[data-open-deal]").forEach(el => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.openDeal;
+      state.section = "acquisitions";
+      state.selectedDealDetail = id;
+      render();
+    });
+  });
+
+  // Manual snapshot button
+  const snapBtn = document.getElementById("kpi-snap-btn");
+  if (snapBtn) {
+    snapBtn.addEventListener("click", async () => {
+      snapBtn.textContent = "Saving...";
+      snapBtn.style.pointerEvents = "none";
+      await takeKPISnapshot(true); // force=true bypasses duplicate check
+      snapBtn.textContent = "✓ Saved";
+      setTimeout(() => { snapBtn.textContent = "Save Snapshot Now"; snapBtn.style.pointerEvents = "auto"; }, 2000);
+      // Reload history
+      loadKPIHistory();
+    });
+  }
+
+  loadKPIHistory();
+}
+
+function loadKPIHistory() {
   // Load KPI history from separate sheet
   const KPI_SHEET = "1x-6WAGl0qjBF4ZXEVMoQuVHDdurrspN7Ksg0wma6g0k";
   const container = document.getElementById("kpi-history-container");
@@ -4025,19 +4123,19 @@ function wireKPIEvents() {
     fetch(SHEETS_BASE + "/" + KPI_SHEET + "/values/Sheet1", { headers: { "Authorization": "Bearer " + state.accessToken } })
     .then(r => r.json())
     .then(data => {
-      if (!data.values || data.values.length < 2) { container.innerHTML = `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">No history yet — snapshots save every Sunday at 11pm</div>`; return; }
+      if (!data.values || data.values.length < 2) { container.innerHTML = `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">No history yet — click "Save Snapshot Now" to save this week</div>`; return; }
       const headers = data.values[0];
       const rows = data.values.slice(1);
       let h = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>`;
       headers.forEach(col => { h += `<th style="text-align:${col==='Week Of'?'left':'center'};padding:8px 10px;font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid var(--border)">${col}</th>`; });
       h += `</tr></thead><tbody>`;
       rows.reverse().forEach(row => {
-        const grade = parseInt(row[8]) || 0;
+        const grade = parseInt(row[10]) || 0;
         const gc = grade >= 80 ? "#10B981" : grade >= 50 ? "#E8A838" : "#EF4444";
         h += `<tr>`;
         row.forEach((val, i) => {
           if (i === 0) h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);font-weight:600;color:var(--text)">${val}</td>`;
-          else if (i === 8) h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);text-align:center;font-weight:700;color:${gc}">${val}</td>`;
+          else if (i === 10) h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);text-align:center;font-weight:700;color:${gc}">${val}</td>`;
           else h += `<td style="padding:6px 10px;border-bottom:1px solid var(--border-light);text-align:center;color:var(--text)">${val}</td>`;
         });
         h += `</tr>`;
@@ -4082,10 +4180,9 @@ function calcWeekKPIs(weekStart) {
   return [weekLabel, findingProps, propUW, loiCreated, loiSent, loiCounter, pctCountered+"%", newBrokerCalls, followUpCalls, dealsClosed, grade+"%"];
 }
 
-async function takeKPISnapshot() {
+async function takeKPISnapshot(force = false) {
   if (!state.accessToken) return;
   try {
-    // Get existing rows to check if this week is already snapshotted
     const existing = await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1!A:A`, {
       headers: { "Authorization": "Bearer " + state.accessToken }
     }).then(r => r.json());
@@ -4094,7 +4191,6 @@ async function takeKPISnapshot() {
     const weekStart = new Date(now); weekStart.setHours(0,0,0,0); weekStart.setDate(weekStart.getDate()-weekStart.getDay());
     const weekLabel = weekStart.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
 
-    // Check if headers exist, if not write them first
     const rows = existing.values || [];
     if (rows.length === 0) {
       await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1!A1:K1?valueInputOption=USER_ENTERED`, {
@@ -4103,13 +4199,11 @@ async function takeKPISnapshot() {
       });
     }
 
-    // Check if this week already snapshotted
     const alreadyDone = rows.some(r => r[0] === weekLabel);
-    if (alreadyDone) return;
+    if (alreadyDone && !force) return;
 
-    // Append snapshot row
     const kpiRow = calcWeekKPIs(weekStart);
-    await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1%21A%3AK:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+    await fetch(`${SHEETS_BASE}/${KPI_SHEET_ID}/values/Sheet1!A:K:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
       method: "POST", headers: {"Authorization":"Bearer "+state.accessToken,"Content-Type":"application/json"},
       body: JSON.stringify({ range:"Sheet1!A:K", majorDimension:"ROWS", values:[kpiRow] })
     });
@@ -4132,6 +4226,23 @@ function waitForGIS() {
   if (typeof google !== "undefined" && google.accounts) {
     initAuth();
     render();
+    // Check for ?deal=<id> URL param and open expanded view
+    const urlParams = new URLSearchParams(window.location.search);
+    const dealParam = urlParams.get("deal");
+    if (dealParam) {
+      // Wait for deals to load then open expanded view
+      const tryOpenDeal = () => {
+        const deal = state.deals.find(d => d.id === dealParam);
+        if (deal) {
+          state.section = "acquisitions";
+          state.selectedDealDetail = dealParam;
+          render();
+        } else if (state.loading) {
+          setTimeout(tryOpenDeal, 300);
+        }
+      };
+      setTimeout(tryOpenDeal, 500);
+    }
   } else {
     setTimeout(waitForGIS, 100);
   }
