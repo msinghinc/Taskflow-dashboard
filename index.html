@@ -3457,6 +3457,178 @@ async function saveRentRollToUW(uwUrl) {
   }
 }
 
+// ---- CSV IMPORT ----
+function parseCSVRow(line) {
+  const result = []; let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === ',' && !inQ) { result.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  result.push(cur);
+  return result;
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  const headers = parseCSVRow(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = parseCSVRow(lines[i]);
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = (vals[idx] || "").trim(); });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function mapCSVRowToDeal(row) {
+  const addr = [row["Property Address"], row["City"], row["State"], row["Zip"]].filter(Boolean).join(", ");
+  const name = row["Property Name"] || row["Property Address"] || addr;
+  const priceStr = (row["For Sale Price"] || "").replace(/[$,\s]/g, "");
+  const ownerFirst = row["Skiptrace:name.first"] || "";
+  const ownerLast = row["Skiptrace:name.last"] || "";
+  const ownerName = [ownerFirst, ownerLast].filter(Boolean).join(" ") || row["True Owner Contact"] || "";
+  const ownerAddr = [row["Skiptrace:mailingAddress.street"],row["Skiptrace:mailingAddress.city"],row["Skiptrace:mailingAddress.state"],row["Skiptrace:mailingAddress.zip"]].filter(Boolean).join(", ");
+  const notesParts = [];
+  if (row["Year Built"]) notesParts.push(`Built: ${row["Year Built"]}`);
+  if (row["Year Renovated"]) notesParts.push(`Renovated: ${row["Year Renovated"]}`);
+  if (row["Percent Leased"]) notesParts.push(`Leased: ${row["Percent Leased"]}%`);
+  if (row["Last Sale Price"]) notesParts.push(`Last Sale: $${row["Last Sale Price"]}`);
+  if (row["Last Sale Date"]) notesParts.push(`Last Sale Date: ${row["Last Sale Date"]}`);
+  if (row["Parking Ratio"]) notesParts.push(`Parking: ${row["Parking Ratio"]}/1000SF`);
+  return {
+    id: Math.random().toString(36).slice(2,10),
+    name, address: addr, propertyType: "multi",
+    stage: "prospecting", priority: "medium",
+    askingPrice: parseFloat(priceStr) || 0,
+    sqft: parseFloat(row["RBA"]) || 0,
+    noi: 0, capRate: 0, acreage: "", numTenants: "", walt: "",
+    broker: row["Leasing Company Name"] || "",
+    brokerContact: row["Leasing Company Contact"] || "",
+    brokerPhone: row["Leasing Company Phone"] || "",
+    brokerEmail: "", notes: notesParts.join(" · "),
+    listingLink: "", uwLink: "", costarLink: "", loiLink: "", omLink: "", folderLink: "",
+    vehiclesPerDay: 0, pop3mi: 0, ahi3mi: 0, score: "",
+    uwRentPsf: "", uwVacancy: "8", uwExpenseRatio: "35", uwTargetCap: "7.5",
+    createdAt: Date.now(), lastActivity: Date.now(),
+    hotList: false, watchList: false, brokerReached: false,
+    callLog: [], stageHistory: [], offerHistory: [],
+    coolDownUntil: null, coolDownMonths: null,
+    listingDate: "", loiSentDate: "", listingStatus: "off_market",
+    uwGeneratedDate: 0, loiGeneratedDate: 0, stageChangedDate: 0, sfLoiLink: "",
+    ownerName, ownerPhone: row["Skiptrace:phoneNumbers.0.number"] || "",
+    ownerPhone2: row["Skiptrace:phoneNumbers.1.number"] || "",
+    ownerEmail: row["Skiptrace:emails.0.email"] || "",
+    ownerAddress: ownerAddr,
+    ownerCompany: (row["True Owner Contact"] && row["True Owner Contact"] !== ownerName) ? row["True Owner Contact"] : "",
+    propertyCondition: "", roofCondition: "", parkingCondition: "", hvacCondition: "",
+    roofAge: 0, hvacAge: 0, parkingAge: 0, deferredMaint: 0, envConcerns: "",
+    locationType: "", shadowAnchor: false, shadowAnchorName: "", coTenancy: "",
+    marketRent: 0, pop1mi: 0, ahi1mi: 0, pop5mi: 0, ahi5mi: 0, popGrowthRate: 0, daytimePopulation: 0
+  };
+}
+
+function wireCSVImport() {
+  const importBtn = document.getElementById("import-csv-btn");
+  const fileInput = document.getElementById("csv-file-input");
+  if (!importBtn || !fileInput) return;
+
+  // Create modal once
+  if (!document.getElementById("csv-import-modal")) {
+    const modal = document.createElement("div");
+    modal.id = "csv-import-modal";
+    modal.style.cssText = "display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center";
+    modal.innerHTML = `
+      <div style="background:var(--bg-card);border-radius:16px;padding:28px;width:480px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)" onclick="event.stopPropagation()">
+        <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:6px">Import Properties from CSV</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px">CoStar/skiptrace export supported. New deals set to Prospecting / Off Market.</div>
+        <div id="csv-preview" style="font-size:13px;color:var(--text-secondary);background:var(--bg);border-radius:8px;padding:12px;margin-bottom:16px;min-height:48px">Select a CSV file to preview.</div>
+        <div id="csv-progress" style="display:none;margin-bottom:12px">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px" id="csv-progress-label">Importing...</div>
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div id="csv-progress-bar" style="height:100%;background:#0071E3;border-radius:3px;width:0%;transition:width 0.3s"></div></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button id="csv-confirm-btn" style="flex:1;padding:10px;background:#0071E3;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;display:none">Import</button>
+          <button id="csv-cancel-btn" style="padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;font-family:'Inter',sans-serif">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener("click", e => { if(e.target===modal) modal.style.display="none"; });
+    document.getElementById("csv-cancel-btn").addEventListener("click", () => { modal.style.display="none"; });
+  }
+
+  const modal = document.getElementById("csv-import-modal");
+  let pendingDeals = [];
+
+  importBtn.addEventListener("click", () => {
+    fileInput.value = "";
+    pendingDeals = [];
+    document.getElementById("csv-preview").innerHTML = "Select a CSV file to preview.";
+    document.getElementById("csv-confirm-btn").style.display = "none";
+    document.getElementById("csv-progress").style.display = "none";
+    modal.style.display = "flex";
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const rows = parseCSV(e.target.result);
+      const existingAddresses = new Set(state.deals.map(d => (d.address||"").toLowerCase().trim()));
+      pendingDeals = []; let skipped = 0;
+      rows.forEach(row => {
+        const deal = mapCSVRowToDeal(row);
+        if (!deal.address && !deal.name) return;
+        if (existingAddresses.has(deal.address.toLowerCase().trim())) { skipped++; return; }
+        pendingDeals.push(deal);
+      });
+      document.getElementById("csv-preview").innerHTML = `
+        <div style="font-weight:600;color:var(--text);margin-bottom:4px">Ready to import <strong>${pendingDeals.length}</strong> new deal${pendingDeals.length!==1?"s":""}.</div>
+        ${skipped>0?`<div style="color:#FF9F0A;font-size:12px;margin-top:4px">⚠ ${skipped} duplicate${skipped!==1?"s":""} skipped (address already exists).</div>`:""}
+        ${pendingDeals.length===0?`<div style="color:#FF3B30;font-size:12px">No new deals to import.</div>`:""}`;
+      document.getElementById("csv-confirm-btn").style.display = pendingDeals.length > 0 ? "block" : "none";
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById("csv-confirm-btn").addEventListener("click", async () => {
+    if (!pendingDeals.length) return;
+    const btn = document.getElementById("csv-confirm-btn");
+    const progress = document.getElementById("csv-progress");
+    const progressBar = document.getElementById("csv-progress-bar");
+    const progressLabel = document.getElementById("csv-progress-label");
+    btn.style.display = "none";
+    progress.style.display = "block";
+    state.deals.push(...pendingDeals);
+    const count = pendingDeals.length;
+    const toImport = [...pendingDeals];
+    pendingDeals = [];
+    try {
+      // Chunked write — 50 rows at a time
+      await saveDealsToSheet(); // save full state first
+      progressBar.style.width = "100%";
+      progressLabel.textContent = `Saved ${count} deals`;
+      modal.style.display = "none";
+      render();
+      const toast = document.createElement("div");
+      toast.style.cssText = "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#34C759;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;font-weight:600;z-index:99999;font-family:'Inter',sans-serif";
+      toast.textContent = `✓ ${count} deal${count!==1?"s":""} imported successfully`;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    } catch(err) {
+      progressLabel.textContent = "✗ Import failed: " + err.message;
+      progressLabel.style.color = "#FF3B30";
+      btn.style.display = "block";
+      btn.textContent = "Retry";
+    }
+  });
+}
+
 function wireEvents() {
   // Deal card clicks (kanban)
   document.querySelectorAll(".k-card[data-deal-id]").forEach(card => {
