@@ -51,7 +51,7 @@ let state = {
   ddDeals: [],
   properties: [],
   section: "acquisitions",
-  view: "kanban",
+  view: "table",
   search: "",
   sortCol: null,
   sortDir: "asc",
