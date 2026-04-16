@@ -477,7 +477,7 @@ async function loadDeals() {
 function filteredDeals() {
   const isCoolingDown = d => d.stage === "cool_down" && d.coolDownUntil && Date.now() < d.coolDownUntil;
   let list = state.deals;
-  if (state.stageFilter === "watchlist") list = list.filter(d => d.watchList);
+  if (state.stageFilter === "watchlist") list = list.filter(d => d.watchList && d.stage !== "dead" && !isCoolingDown(d));
   else if (state.stageFilter === "cool_down") list = list.filter(d => d.stage === "cool_down");
   else if (state.stageFilter === "loi_ready") list = list.filter(d => d.loiGeneratedDate > 0 && !d.loiSentDate);
   else if (state.stageFilter !== "all") list = list.filter(d => d.stage === state.stageFilter && !isCoolingDown(d));
