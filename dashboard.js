@@ -2680,6 +2680,62 @@ function renderDealDetail(d) {
   return h;
 }
 
+// ---- LOI GENERATION (dashboard) ----
+function numberToWordsDash(n) {
+  const ones = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+  const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+  function below1000(n) {
+    if (n < 20) return ones[n];
+    if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? " " + ones[n%10] : "");
+    return ones[Math.floor(n/100)] + " Hundred" + (n%100 ? " " + below1000(n%100) : "");
+  }
+  n = Math.round(n);
+  if (n === 0) return "Zero";
+  let result = "";
+  if (n >= 1000000) { result += below1000(Math.floor(n/1000000)) + " Million "; n %= 1000000; }
+  if (n >= 1000) { result += below1000(Math.floor(n/1000)) + " Thousand "; n %= 1000; }
+  if (n > 0) result += below1000(n);
+  return result.trim() + " Dollars";
+}
+
+function formatMoneyDash(n) {
+  n = parseFloat(n);
+  if (!n && n !== 0) return "$0";
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function generateLOIDash(address, loiPrice, ddDays) {
+  const price = parseFloat(loiPrice) || 0;
+  const deposit = price * 0.015;
+  const ddDaysNum = parseInt(ddDays) || 30;
+  const ddDaysText = ddDaysNum === 45 ? "Forty-Five" : ddDaysNum === 30 ? "Thirty" : "Twenty-Five";
+  const priceText = numberToWordsDash(price);
+  const formattedPrice = formatMoneyDash(price);
+  const formattedDeposit = formatMoneyDash(deposit);
+  const offerDate = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+
+  const LOI_TEXT = `Blue Bay Ventures LLC\n883 Sneath Lane, Unit 222\nSan Bruno, CA, 94066\n\n${offerDate}\n\nOwners on record\nAddress: ${address}\nEmail: Daryll@canlascommercial.com\n\nLetter of Intent to Purchase: ${address}\n\nDear Owners on Record:\n\nThe purpose of this letter is to set forth the material terms and conditions pursuant to which Blue Bay Ventures LLC and/or its assignees is willing to enter into negotiations to purchase the 100% fee simple interest in the real property located at ${address} (the "Property").\n\nWe are willing to proceed on the following terms and conditions.\n\nBuyer: A to-be-formed Single Purpose Entity designated by Blue Bay Ventures LLC\nSeller: Owners on record\nBroker's Commission: The Buyer will be represented by Canlas Brothers, Inc. (Brokerage #02112541).\nSubject Property: ${address}\nEscrow and Title Insurance: Buyer's choice or seller's choice at sellers expense\nPurchase Price: ${priceText} (${formattedPrice})\nPayment Terms: The Purchase Price will be paid as follows:\n\n${formattedDeposit}  Paid as a Deposit within Seven (7) business days after execution of the Purchase and Sale Agreement and establishment of escrow.\n\n${formattedDeposit}  Paid as additional Deposit within Seven (7) business days after the satisfaction of due diligence as described below.\n\n${formattedPrice}  Purchase Price\n\nOther Terms and Conditions: Buyer's obligations to proceed with this purchase are subject to the following general terms and conditions.\n\nPurchase and Sale Agreement on terms mutually acceptable to Buyer and Seller will be negotiated and executed within Fourteen business days (14) days after Seller's execution of this letter.\n\nOnce a Purchase and Sale Agreement has been executed, Buyer will deposit with escrow the refundable initial deposit as set forth above.\n\nUpon execution of this Purchase and Sale Agreement and receipt of all due diligence materials, Buyer will have a ${ddDaysText} (${ddDaysNum}) business days period during which Buyer may conduct business, physical and legal due diligence, including feasibility of redevelopment of the Property. Seller also to cooperate with Buyer's potential 1031 exchange. Due to current timing delays with consultants and government organizations, Buyer will have one option to extend the due diligence period, with commercially reasonable justification provided to Seller.\n\nUpon execution of this letter, Seller will forward to Buyer a comprehensive list of due diligence items, including, but not limited to, summary of rents and expenses for the past three years, copies of leases and rental agreements, preliminary title report, surveys (if any), third party engineering and environmental reports and the like, as are customary in similar transactions. Seller agrees to cooperate with Buyer as it conducts its business, physical and legal due diligence regarding the Property. Buyer will maintain all of such documents as confidential. In the event that a Purchase and Sale Agreement is not entered into, Buyer shall return all such documents provided by Seller and shall not retain copies thereof.\n\nUpon execution of a Purchase and Sale Agreements, Buyer shall have the right to conduct further due diligence, including any matters set forth in subparagraph d above, as well as a Phase I environmental assessment. In the event that the Phase I environmental assessment recommends any Phase II further investigation, Buyer and Seller will discuss any proposed invasive testing, which shall require Seller's approval, not to be unreasonably withheld, conditioned or delayed. Buyer will act in good faith to seek to restrict any results from these investigations being reported to any government agencies, except to the extent required by law or over which Buyer has no control. Costs associated with these investigations will be covered exclusively by the Buyer. Prior to Close of Escrow, Seller shall provide customary estoppel certificates from any and all tenants of the Property.\n\nBuyer's obligation to proceed with the purchase will be subject to completion of due diligence satisfactory to Buyer in Buyer's sole and absolute discretion prior to the expiration of the due diligence period, including, but not limited to, consultations with Architects, Engineers, Third Party Consultants, City officials, etc.\n\nBuyer shall notify Seller in writing of completion of all due diligence. Silence shall be deemed disapproval, no further action shall be required, and Buyer and Seller shall promptly instruct Escrow to return Buyer's deposits.\n\nAfter due diligence has been completed and notification of contingency removal has been submitted, Buyer will increase the deposit as detailed above within Seven (7) business days. The entire deposits into escrow at this point will become non-refundable, except for default or material failure by Seller to comply with the terms of the Purchase and Sale Agreement, or Seller's inability to provide clean title pursuant to the preliminary report of title approved by Buyer.\n\nOnce the final deposit has been submitted to escrow, the Buyer will be obligated to close on the purchase of the property within Thirty (30) business days.\n\nBuyer agrees to use Buyer's best efforts, at Buyer's expense, to obtain a new first loan at current market rates and terms. Said loan shall be secured by a new first mortgage or deed of trust on the Property. Seller and Buyer agree that the lender's production of loan documents shall satisfy the financing contingency. If Buyer applies for a loan and the lender refuses to finance the purchase, then this Agreement will be rendered null, and void and Buyer's Deposit shall be returned to Buyer. If Buyer fails to notify Seller in writing that Buyer has obtained such a loan within forty-five (45) business days of the Effective Date, then at Seller's option this Agreement shall be null and void. Seller agrees to pay any prepayment penalties due on the existing loan(s).\n\nThe Property will be delivered free and clear of mortgage debt, liens, and non-disclosed encumbrances, liens, covenants or restrictions not set forth in the preliminary report of title approved by Buyer.\n\nAt the Closing, rent received, utilities, taxes and other customary items shall be prorated, and all tenant security deposits shall be credited against the purchase price.\n\nAll Deposits paid will be held in escrow, in an interest-bearing account. All interest earned on the Deposits will be credited to the Buyer at Closing. If the Purchase and Sale Agreement is canceled other than by reason of Buyer's default, any Deposits previously paid will be refunded to Buyer with interest earned thereon.\n\nEach of Seller and Buyer will pay its own counsel fees arising in connection with this transaction. Buyer will choose the escrow and title company. Documentary Transfer Taxes will be the responsibility of the Seller. All other closing costs shall be allocated, debited and paid through Escrow in accordance with customary local practice for commercial properties. If the transaction does not close, this paragraph will survive and will be binding on both Buyer and Seller, unless superseded by the Purchase and Sale Agreement.\n\nPermitting Period: Purchaser will have sixty (60) business days from the expiration of the Inspection Period to (i) pursue all governmental and third-party approvals and permits necessary for the Intended Use and (ii) obtain construction cost estimates to confirm that construction of the improvements is economically feasible for the Intended Use. Purchaser may extend the Permitting Period for up to three (3) additional period(s) of forty-five (45) business days each.\n\nExclusivity/No Shop: Seller agrees that upon execution of this letter, Seller and its agents, including Seller's listing broker, shall cease negotiations with any other existing or prospective buyers of the Property, will not solicit and agrees not to enter into any agreements concerning the sale or transfer of the Property with any other person or entity other than Buyer following the execution of this letter (the "Exclusivity Period"). Upon execution of this letter, Buyer and Seller shall negotiate in good faith to finalize the Purchase and sale Agreement. If the Purchase and sale Agreement is not executed before the expiration of the Exclusivity Period, this executed letter shall automatically terminate, and neither Buyer nor Seller shall have any further rights or obligations hereunder.\n\nBuyer shall have the right to assign its rights and delegate its obligations under this Agreement at any time prior to Close of Escrow. However, Buyer shall remain jointly and severally liable with any assignee with respect to the obligations set forth in subparagraphs d) and m) above, as set forth below.\n\nThis letter of intent is not a contract for the purchase and sale of real property, which shall be deemed to exist only upon execution by Buyer and Seller of a Purchase and Sale Agreement as set forth above and neither Buyer nor Seller shall have any obligation to the other for the sale or purchase of the Property, including but not limited to Buyer's exercise of its rights of termination as set forth above; provided, however, the obligations of the parties pursuant to subparagraph d) above (confidentiality and return of documents) and subparagraph n) above ("No shop/Exclusivity"), and including any assignees of Buyer, shall be deemed to constitute bargained-for provisions of this Agreement and shall bind each of the parties notwithstanding any termination of this Agreement.\n\nPlease confirm your agreement with the terms and conditions of this letter by having a duly authorized representative of Seller countersign below and return a signed copy of this letter to the undersigned (PDF via email is acceptable). If this letter is not executed and returned within two (2) business days after the date hereof, this letter will expire and the proposals set forth herein withdrawn. Time is of the essence.\n\nWe look forward to working with you on this transaction.\n\nSincerely,\n\n\nBlue Bay Ventures LLC\n\n\nBy:  _________________________________\nPrint: Daryll Canlas\nTitle: President & CEO\n\n\n\n\nACCEPTED AND AGREED:\nBy:  _________________________________\nPrint: Owners on record - ${address}\n\nBy:  _________________________________\nPrint: Owners on record - ${address}\n\nDate:________________________________`;
+
+  const auth = { "Authorization": "Bearer " + state.accessToken, "Content-Type": "application/json" };
+
+  // Create doc
+  const createResp = await fetch("https://docs.googleapis.com/v1/documents", {
+    method: "POST", headers: auth,
+    body: JSON.stringify({ title: "LOI - " + address + " - " + offerDate })
+  });
+  const createData = await createResp.json();
+  if (!createData.documentId) throw new Error("Failed to create doc: " + JSON.stringify(createData));
+  const docId = createData.documentId;
+
+  // Insert text
+  await fetch("https://docs.googleapis.com/v1/documents/" + docId + ":batchUpdate", {
+    method: "POST", headers: auth,
+    body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: LOI_TEXT } }] })
+  });
+
+  return "https://docs.google.com/document/d/" + docId + "/edit";
+}
+
 function wireDealDetailEvents() {
   const d = state.deals.find(dl => dl.id === state.selectedDealDetail);
   if (!d) return;
@@ -2737,26 +2793,14 @@ function wireDealDetailEvents() {
       status.style.display = "block";
       status.style.color = "var(--text-muted)";
       try {
-        const offerDate = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
-        const resp = await chrome.runtime.sendMessage({
-          type: "GENERATE_LOI_DASHBOARD",
-          payload: { address: d.address || d.name, offerDate, loiPrice, ddDays }
-        });
-        if (resp && resp.success) {
-          // Save LOI link to deal
-          d.loiLink = resp.docUrl;
-          d.loiGeneratedDate = Date.now();
-          d.lastActivity = Date.now();
-          await saveDealsToSheet();
-          loiGenOverlay.style.display = "none";
-          window.open(resp.docUrl, "_blank");
-          render();
-        } else {
-          status.textContent = "✗ Failed: " + (resp?.error || "Unknown error");
-          status.style.color = "#EF4444";
-          saveBtn.textContent = "Retry";
-          saveBtn.style.pointerEvents = "auto";
-        }
+        const docUrl = await generateLOIDash(d.address || d.name, loiPrice, ddDays);
+        d.loiLink = docUrl;
+        d.loiGeneratedDate = Date.now();
+        d.lastActivity = Date.now();
+        await saveDealsToSheet();
+        loiGenOverlay.style.display = "none";
+        window.open(docUrl, "_blank");
+        render();
       } catch(e) {
         status.textContent = "✗ Error: " + e.message;
         status.style.color = "#EF4444";
