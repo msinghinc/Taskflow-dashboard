@@ -2499,7 +2499,8 @@ function renderDealDetail(d) {
     if(d.omLink)links.push({label:"OM",url:d.omLink,color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"});
     if(links.length){h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">`;links.forEach(l=>{h+=`<a href="${esc(l.url)}" target="_blank" style="padding:6px 14px;background:${l.bg};border:1px solid ${l.border};border-radius:8px;font-size:12px;color:${l.color};text-decoration:none;font-weight:600">🔗 ${l.label}</a>`;});h+=`</div>`;}
 
-    // Broker section
+    // Generate LOI button (always shown in property info tab)
+    h+=`<div style="margin-bottom:16px"><button data-action="deal-gen-loi" style="padding:8px 16px;background:#16A34A;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">📝 Generate LOI</button></div>`;
     if(d.broker||d.brokerContact||d.brokerPhone||d.brokerEmail){
       h+=`<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
         <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:700;color:var(--text);margin-bottom:12px">Broker</div>
@@ -2651,6 +2652,30 @@ function renderDealDetail(d) {
     </div>
   </div>`;
 
+  // LOI Generation Modal
+  h+=`<div id="loi-gen-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center">
+    <div style="background:var(--bg-card);border-radius:14px;padding:28px;width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)" onclick="event.stopPropagation()">
+      <div style="font-family:'Inter',sans-serif;font-size:17px;font-weight:800;margin-bottom:18px">Generate LOI</div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">PURCHASE PRICE</div>
+        <input id="loi-price-input" type="number" placeholder="e.g. 4500000" onclick="event.stopPropagation()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:18px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px">DUE DILIGENCE PERIOD</div>
+        <select id="loi-dd-days" onclick="event.stopPropagation()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif">
+          <option value="30">30 Business Days</option>
+          <option value="45">45 Business Days</option>
+          <option value="25">25 Business Days</option>
+        </select>
+      </div>
+      <div id="loi-gen-status" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;display:none"></div>
+      <div style="display:flex;gap:8px">
+        <button id="loi-gen-save" style="flex:1;padding:10px;background:#16A34A;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif">Generate</button>
+        <button id="loi-gen-cancel" style="padding:10px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;font-family:'Inter',sans-serif">Cancel</button>
+      </div>
+    </div>
+  </div>`;
+
   h+=`</div>`;
   return h;
 }
@@ -2685,6 +2710,61 @@ function wireDealDetailEvents() {
       await saveDealsToSheet(); render();
     });
   });
+
+  // Generate LOI button + modal
+  const loiGenBtn = document.querySelector("[data-action='deal-gen-loi']");
+  const loiGenOverlay = document.getElementById("loi-gen-overlay");
+  if (loiGenBtn && loiGenOverlay) {
+    loiGenBtn.addEventListener("click", () => {
+      document.getElementById("loi-price-input").value = d.askingPrice || "";
+      document.getElementById("loi-dd-days").value = "30";
+      document.getElementById("loi-gen-status").style.display = "none";
+      document.getElementById("loi-gen-save").textContent = "Generate";
+      document.getElementById("loi-gen-save").style.pointerEvents = "auto";
+      loiGenOverlay.style.display = "flex";
+    });
+    document.getElementById("loi-gen-cancel").addEventListener("click", () => { loiGenOverlay.style.display = "none"; });
+    loiGenOverlay.addEventListener("click", e => { if (e.target === loiGenOverlay) loiGenOverlay.style.display = "none"; });
+    document.getElementById("loi-gen-save").addEventListener("click", async () => {
+      const loiPrice = document.getElementById("loi-price-input").value;
+      const ddDays = document.getElementById("loi-dd-days").value;
+      if (!loiPrice || parseFloat(loiPrice) <= 0) { alert("Enter a valid purchase price."); return; }
+      const saveBtn = document.getElementById("loi-gen-save");
+      const status = document.getElementById("loi-gen-status");
+      saveBtn.textContent = "Generating...";
+      saveBtn.style.pointerEvents = "none";
+      status.textContent = "Creating Google Doc...";
+      status.style.display = "block";
+      status.style.color = "var(--text-muted)";
+      try {
+        const offerDate = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+        const resp = await chrome.runtime.sendMessage({
+          type: "GENERATE_LOI_DASHBOARD",
+          payload: { address: d.address || d.name, offerDate, loiPrice, ddDays }
+        });
+        if (resp && resp.success) {
+          // Save LOI link to deal
+          d.loiLink = resp.docUrl;
+          d.loiGeneratedDate = Date.now();
+          d.lastActivity = Date.now();
+          await saveDealsToSheet();
+          loiGenOverlay.style.display = "none";
+          window.open(resp.docUrl, "_blank");
+          render();
+        } else {
+          status.textContent = "✗ Failed: " + (resp?.error || "Unknown error");
+          status.style.color = "#EF4444";
+          saveBtn.textContent = "Retry";
+          saveBtn.style.pointerEvents = "auto";
+        }
+      } catch(e) {
+        status.textContent = "✗ Error: " + e.message;
+        status.style.color = "#EF4444";
+        saveBtn.textContent = "Retry";
+        saveBtn.style.pointerEvents = "auto";
+      }
+    });
+  }
 
   // Log offer event
   const offerBtn = document.querySelector("[data-action='deal-log-offer']");
